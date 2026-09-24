@@ -1,0 +1,313 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, maximum-scale=1">
+<title>SIAP APEL — Versi Pegawai | Setda Provinsi Sulawesi Tenggara</title>
+<meta name="description" content="Absensi Apel Pegawai (PNS, CPNS, PPPK) — scan QR, tanda tangan digital, dan rekap kehadiran.">
+<meta name="theme-color" content="#0F2A47">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="SIAP APEL">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="assets/logo.png">
+<link rel="apple-touch-icon" href="assets/icon-192.png">
+<link rel="stylesheet" href="css/styles.css">
+<link rel="stylesheet" href="css/staf.css">
+</head>
+<body>
+<div class="app">
+
+  <div class="sidebar-overlay" id="sidebarOverlay"></div>
+
+  <aside class="sidebar" id="sidebar">
+    <div class="sidebar-scroll">
+      <div class="brand">
+        <img class="brand-logo" src="assets/logo.png" alt="Logo Provinsi Sulawesi Tenggara">
+        <div class="brand-text">
+          <b class="brand-title">SIAP APEL</b>
+          <span class="brand-sub">Versi Pegawai · PNS / CPNS / PPPK</span>
+          <span class="brand-org">Sekretariat Daerah<br>Provinsi Sulawesi Tenggara</span>
+        </div>
+      </div>
+      <nav>
+        <button class="nav-item active" data-page="beranda"><span class="ic">🏠</span>Beranda</button>
+        <button class="nav-item" data-page="absen"><span class="ic">✅</span>Absen Kehadiran</button>
+        <button class="nav-item" data-page="qr"><span class="ic">🔳</span>Kartu QR Pegawai</button>
+        <button class="nav-item" data-page="pegawai"><span class="ic">👥</span>Data Pegawai</button>
+        <button class="nav-item" data-page="rekap"><span class="ic">📊</span>Rekap &amp; Cetak</button>
+        <button class="nav-item" data-page="pengaturan"><span class="ic">⚙️</span>Pengaturan</button>
+      </nav>
+      <div class="sidebar-foot">
+        <span id="connDotLabel"><span class="live-dot off" id="liveDot"></span><span id="connText">Memeriksa koneksi...</span></span>
+      </div>
+    </div>
+  </aside>
+
+  <div class="main-col">
+    <div class="topbar">
+      <div class="topbar-left">
+        <button class="hamburger" id="btnHamburger" aria-label="Buka menu">☰</button>
+        <h1 id="pageTitle">Beranda</h1>
+      </div>
+      <div style="display:flex;align-items:center;gap:12px;">
+        <div class="today" id="todayLabel"></div>
+        <div class="conn-badge off" id="connBadge"><span class="dot"></span><span id="connBadgeText">Offline</span></div>
+      </div>
+    </div>
+
+    <main class="content">
+
+      <div id="configBanner" class="config-banner" style="display:none;">
+        ⚠️ <b>Supabase belum dikonfigurasi.</b> Buka <code>js/config.js</code> dan isi <code>SUPABASE_URL</code> serta <code>SUPABASE_ANON_KEY</code>, lalu pastikan <code>supabase/schema.sql</code> sudah dijalankan di SQL Editor Supabase.
+      </div>
+      <div class="offline-banner" id="offlineBanner">📴 <span>Anda sedang offline. Menampilkan data terakhir yang tersimpan di perangkat. Sambungkan internet untuk absen / sinkronisasi.</span></div>
+
+      <!-- BERANDA -->
+      <section id="page-beranda" class="page active">
+        <div class="hero-grid">
+          <div class="hero-card">
+            <div class="label">Total Pegawai Aktif</div>
+            <div class="num" id="totalAktifStaf">0</div>
+            <div class="sub">PNS, CPNS &amp; PPPK</div>
+          </div>
+          <div class="card" style="margin-bottom:0;display:flex;flex-direction:column;justify-content:center;">
+            <h2>Ringkasan Hari Ini <span class="muted-sm" id="dashDateLabelStaf"></span></h2>
+            <div class="donut-row">
+              <div class="donut-wrap">
+                <svg viewBox="0 0 36 36" id="donutStaf"></svg>
+                <div class="donut-center"><b id="donutStafPct">0%</b><span>Hadir</span></div>
+              </div>
+              <div class="donut-legend" id="legendStaf"></div>
+            </div>
+          </div>
+        </div>
+
+        <div class="section-title">Aksi Cepat</div>
+        <div class="quick-grid">
+          <button class="quick-card alt" data-go="absen"><span class="qi">✅</span><span class="qt">Absen Sekarang</span><span class="qs">Scan QR atau pilih nama manual</span></button>
+          <button class="quick-card" data-go="qr"><span class="qi">🔳</span><span class="qt">Kartu QR Pegawai</span><span class="qs">Lihat &amp; cetak kartu QR</span></button>
+          <button class="quick-card" data-go="rekap"><span class="qi">📊</span><span class="qt">Rekap &amp; Cetak</span><span class="qs">Daftar hadir &amp; rekap periode</span></button>
+        </div>
+
+        <div class="card">
+          <h2>Apel Pagi — Hari Ini</h2>
+          <div class="grid-cards" id="dashPagiStaf"></div>
+        </div>
+        <div class="card">
+          <h2>Apel Sore — Hari Ini</h2>
+          <div class="grid-cards" id="dashSoreStaf"></div>
+        </div>
+      </section>
+
+      <!-- ABSEN -->
+      <section id="page-absen" class="page">
+        <div class="card">
+          <div class="absen-steps">
+            <div class="absen-step active" id="stepInd1">1. Sesi Apel</div>
+            <div class="absen-step" id="stepInd2">2. Metode</div>
+            <div class="absen-step" id="stepInd3">3. Pilih Pegawai</div>
+            <div class="absen-step" id="stepInd4">4. Status &amp; Tanda Tangan</div>
+          </div>
+
+          <!-- STEP 1 -->
+          <div id="absenStep1">
+            <div class="toolbar">
+              <div class="field"><label>Tanggal</label><input type="date" id="absenTanggal"></div>
+              <div class="field"><label>Jenis Apel</label><select id="absenJenisApel"><option value="Apel Pagi">Apel Pagi</option><option value="Apel Sore">Apel Sore</option></select></div>
+              <div class="field"><label>&nbsp;</label><button class="btn gold" id="btnLanjutStep1">Lanjut →</button></div>
+            </div>
+          </div>
+
+          <!-- STEP 2 -->
+          <div id="absenStep2" style="display:none;">
+            <div class="method-grid">
+              <div class="method-card" id="cardScanQr"><div class="mi">📷</div><div class="mt">Scan Kartu QR</div><div class="ms">Arahkan kamera ke QR pegawai</div></div>
+              <div class="method-card" id="cardManual"><div class="mi">🔎</div><div class="mt">Pilih Manual</div><div class="ms">Cari nama dari daftar pegawai</div></div>
+            </div>
+            <div class="toolbar" style="margin-top:14px;"><button class="btn outline" id="btnBackStep2">← Kembali</button></div>
+          </div>
+
+          <!-- STEP 2A: SCAN -->
+          <div id="absenScanBox" style="display:none;">
+            <div id="qrReaderBox"><div id="qrReader"></div></div>
+            <p class="scan-hint" id="scanHint">Meminta izin kamera...</p>
+            <div class="toolbar" style="justify-content:center;margin-top:10px;"><button class="btn outline" id="btnBatalScan">Batal / Kembali</button></div>
+          </div>
+
+          <!-- STEP 2B: MANUAL -->
+          <div id="absenManualBox" style="display:none;">
+            <div class="field" style="margin-bottom:12px;"><label>Cari Nama Pegawai</label><input type="text" id="absenSearchStaf" placeholder="Ketik nama atau NIP..."></div>
+            <div class="table-wrap" style="max-height:340px;overflow-y:auto;">
+              <table><tbody id="absenStafList"></tbody></table>
+            </div>
+            <div class="toolbar" style="margin-top:10px;"><button class="btn outline" id="btnBatalManual">← Kembali</button></div>
+          </div>
+
+          <!-- STEP 3/4: STATUS + TTD -->
+          <div id="absenStep34" style="display:none;">
+            <div class="staf-picked-card" id="stafPickedCard"></div>
+            <div id="absenExistingNotice" class="hint" style="display:none;"></div>
+
+            <div class="section-title">Status Kehadiran</div>
+            <div class="status-grid-big" id="statusGridBig"></div>
+
+            <div id="ketBox" style="display:none;margin-bottom:14px;">
+              <div class="field"><label>Keterangan</label><input type="text" id="absenKeterangan" placeholder="opsional"></div>
+            </div>
+
+            <div id="sigBox" style="display:none;margin-bottom:14px;">
+              <div class="section-title">Tanda Tangan</div>
+              <div class="sigpad-wrap">
+                <canvas id="sigCanvas"></canvas>
+                <div class="sigpad-placeholder" id="sigPlaceholder">Tanda tangan di sini ✍️</div>
+              </div>
+              <div class="sigpad-actions">
+                <span>Gunakan jari / mouse untuk tanda tangan</span>
+                <button class="btn small outline" id="btnClearSig">Hapus</button>
+              </div>
+            </div>
+
+            <div class="toolbar">
+              <button class="btn outline" id="btnBatalStep34">← Batal</button>
+              <button class="btn gold" id="btnSimpanAbsen">💾 Simpan Kehadiran</button>
+            </div>
+          </div>
+
+          <!-- SUCCESS -->
+          <div id="absenSuccessBox" style="display:none;">
+            <div class="success-box">
+              <div class="sic">✅</div>
+              <h3>Absen Berhasil Dicatat</h3>
+              <p id="successDetail"></p>
+              <div class="toolbar" style="justify-content:center;margin-top:16px;">
+                <button class="btn gold" id="btnAbsenLagi">Absen Pegawai Lain</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- KARTU QR -->
+      <section id="page-qr" class="page">
+        <div class="card">
+          <div class="qr-toolbar">
+            <div class="field"><label>Cari</label><input type="text" id="qrSearch" placeholder="Nama / NIP..."></div>
+            <div class="field"><label>Biro</label><select id="qrFilterBiro"><option value="">Semua Biro</option></select></div>
+            <div class="field"><label>&nbsp;</label><button class="btn outline" id="btnCetakSemuaQr">🖨️ Cetak Semua Kartu</button></div>
+          </div>
+          <div class="hint">Setiap pegawai memiliki kode QR unik untuk absen cepat pada menu <b>Absen Kehadiran → Scan Kartu QR</b>. Cetak kartu ini dan bagikan ke masing-masing pegawai (laminating disarankan).</div>
+          <div class="qr-grid" id="qrGrid"></div>
+        </div>
+      </section>
+
+      <!-- DATA PEGAWAI -->
+      <section id="page-pegawai" class="page">
+        <div class="card">
+          <div class="toolbar">
+            <div class="field"><label>Cari</label><input type="text" id="searchStaf" placeholder="Nama / NIP..."></div>
+            <div class="field"><label>Biro</label><select id="filterBiroStaf"><option value="">Semua Biro</option></select></div>
+            <div class="field"><label>Kategori</label><select id="filterKategori"><option value="">Semua</option><option value="PNS">PNS</option><option value="CPNS">CPNS</option><option value="PPPK">PPPK</option></select></div>
+            <div class="field"><label>&nbsp;</label><button class="btn gold" id="btnTambahStaf">+ Tambah Pegawai</button></div>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>No</th><th>Nama</th><th>NIP</th><th>Gol</th><th>Kategori</th><th>Jabatan</th><th>Status</th><th>Aksi</th></tr></thead>
+              <tbody id="tabelStaf"><tr><td colspan="8"><div class="loading-row"><span class="spinner dark"></span>Memuat data pegawai...</div></td></tr></tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <!-- REKAP -->
+      <section id="page-rekap" class="page">
+        <div class="card">
+          <div class="toolbar">
+            <div class="field"><label>Mode</label><select id="rekapModeStaf"><option value="harian">Harian (Daftar Hadir)</option><option value="range">Rentang Tanggal</option></select></div>
+            <div class="field" id="rekapTglSatuWrapStaf"><label>Tanggal</label><input type="date" id="rekapTglSatuStaf"></div>
+            <div class="field" id="rekapDariWrapStaf" style="display:none;"><label>Dari Tanggal</label><input type="date" id="rekapDariStaf"></div>
+            <div class="field" id="rekapSampaiWrapStaf" style="display:none;"><label>Sampai Tanggal</label><input type="date" id="rekapSampaiStaf"></div>
+            <div class="field" id="rekapJenisApelWrapStaf"><label>Jenis Apel</label><select id="rekapJenisApelStaf"><option value="Apel Pagi">Apel Pagi</option><option value="Apel Sore">Apel Sore</option><option value="">Semua</option></select></div>
+            <div class="field"><label>Biro</label><select id="rekapBiroStaf"><option value="">Semua Biro</option></select></div>
+            <div class="field"><label>&nbsp;</label><button class="btn gold" id="btnTampilkanRekapStaf">Tampilkan</button></div>
+            <div class="field"><label>&nbsp;</label><button class="btn outline" id="btnCetakDaftarHadir">🖨️ Cetak Daftar Hadir</button></div>
+          </div>
+          <div id="rekapHasilStaf"></div>
+        </div>
+      </section>
+
+      <!-- PENGATURAN -->
+      <section id="page-pengaturan" class="page">
+        <div class="card">
+          <h2>Status Koneksi Database</h2>
+          <p class="hint" id="pengaturanConnInfoStaf">Memeriksa koneksi ke Supabase...</p>
+        </div>
+        <div class="card">
+          <h2>Identitas Kepala Biro (untuk tanda tangan cetak Daftar Hadir)</h2>
+          <div class="toolbar">
+            <div class="field" style="min-width:220px;"><label>Biro</label><select id="kbBiro"></select></div>
+          </div>
+          <div class="form-row"><label>Nama Kepala Biro</label><input type="text" id="kbNama"></div>
+          <div class="form-row"><label>Pangkat / Golongan</label><input type="text" id="kbPangkat" placeholder="contoh: Pembina Utama Muda, IV/c"></div>
+          <div class="form-row"><label>NIP</label><input type="text" id="kbNip"></div>
+          <button class="btn gold" id="btnSimpanKepalaBiro">Simpan</button>
+        </div>
+        <div class="card">
+          <h2>Aplikasi Mobile</h2>
+          <p class="hint">Halaman ini dapat dipasang sebagai aplikasi di layar utama HP (Android/iOS): buka menu browser → <b>"Tambahkan ke Layar Utama" / "Install App"</b>. Setelah terpasang, absen &amp; scan QR bisa dibuka langsung seperti aplikasi biasa.</p>
+        </div>
+        <div class="card">
+          <h2>Backup Data</h2>
+          <div class="toolbar"><button class="btn gold" id="btnBackupStaf">⬇️ Backup Data Pegawai (JSON)</button></div>
+        </div>
+      </section>
+
+    </main>
+  </div>
+</div>
+
+<!-- MODAL PEGAWAI -->
+<div class="modal-overlay hidden" id="modalStaf">
+  <div class="modal">
+    <h3 id="modalStafTitle">Tambah Pegawai</h3>
+    <input type="hidden" id="stafId">
+    <div class="form-row"><label>Nama</label><input type="text" id="stafNama"></div>
+    <div class="form-row"><label>NIP</label><input type="text" id="stafNip"></div>
+    <div class="form-row"><label>Golongan</label><input type="text" id="stafGolongan" placeholder="contoh: III/a"></div>
+    <div class="form-row"><label>Kategori</label><select id="stafKategori"><option value="PNS">PNS</option><option value="CPNS">CPNS</option><option value="PPPK">PPPK</option></select></div>
+    <div class="form-row"><label>Biro</label><select id="stafBiro"></select></div>
+    <div class="form-row"><label>Jabatan</label><input type="text" id="stafJabatan"></div>
+    <div class="form-row"><label>Status</label><select id="stafAktif"><option value="1">Aktif</option><option value="0">Tidak Aktif</option></select></div>
+    <div class="modal-actions">
+      <button class="btn outline" id="btnBatalStaf">Batal</button>
+      <button class="btn gold" id="btnSimpanStaf">Simpan</button>
+    </div>
+  </div>
+</div>
+
+<!-- MODAL QR SATU PEGAWAI -->
+<div class="modal-overlay hidden" id="modalQrSatu">
+  <div class="modal">
+    <h3>Kartu QR Pegawai</h3>
+    <div class="qr-card" id="qrSatuContent" style="border:none;box-shadow:none;"></div>
+    <div class="modal-actions">
+      <button class="btn outline" id="btnRegenQr">🔄 Buat Ulang QR</button>
+      <button class="btn gold" id="btnTutupQrSatu">Tutup</button>
+    </div>
+  </div>
+</div>
+
+<div class="toast hidden" id="toast"></div>
+<div id="printArea"></div>
+
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="https://cdn.jsdelivr.net/npm/qrcode@1.5.4/build/qrcode.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
+<script src="js/config.js"></script>
+<script src="js/supabase-init.js"></script>
+<script src="js/staf-db.js"></script>
+<script src="js/signature-pad.js"></script>
+<script src="js/staf-app.js"></script>
+</body>
+</html>

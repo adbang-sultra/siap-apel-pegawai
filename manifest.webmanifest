@@ -1,0 +1,16 @@
+{
+  "name": "SIAP APEL — Versi Pegawai",
+  "short_name": "SIAP APEL",
+  "description": "Absensi Apel Pegawai — scan QR, tanda tangan digital, dan rekap kehadiran.",
+  "start_url": "./index.html",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait-primary",
+  "background_color": "#0F2A47",
+  "theme_color": "#0F2A47",
+  "icons": [
+    { "src": "assets/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "assets/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "assets/icon-512-maskable.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}

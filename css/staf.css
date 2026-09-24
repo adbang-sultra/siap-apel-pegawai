@@ -1,0 +1,142 @@
+/* =====================================================================
+   SIAP APEL — Versi Pegawai: komponen tambahan + format cetak Daftar Hadir
+   ===================================================================== */
+
+/* ---------------- Quick actions / mobile FAB ---------------- */
+.quick-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin-bottom:18px;}
+.quick-card{
+  background:linear-gradient(135deg,var(--navy-900),var(--navy-800));color:#fff;border-radius:var(--radius-lg);
+  padding:18px;cursor:pointer;border:none;text-align:left;box-shadow:var(--shadow-sm);
+  transition:transform .16s var(--ease),box-shadow .16s var(--ease);display:flex;flex-direction:column;gap:6px;
+}
+.quick-card:hover{transform:translateY(-3px);box-shadow:var(--shadow-md);}
+.quick-card .qi{font-size:26px;}
+.quick-card .qt{font-weight:700;font-size:14.5px;}
+.quick-card .qs{font-size:11.5px;color:#b9c6d8;}
+.quick-card.alt{background:linear-gradient(135deg,var(--gold),#a97e2b);color:#241705;}
+.quick-card.alt .qs{color:#4a3616;}
+
+.fab-absen{
+  position:fixed;right:18px;bottom:18px;z-index:30;
+  background:var(--gold);color:#241705;border:none;border-radius:999px;
+  padding:14px 20px;font-weight:700;font-size:14px;box-shadow:var(--shadow-lg);
+  display:none;align-items:center;gap:8px;cursor:pointer;
+}
+@media (max-width:980px){ .fab-absen{display:inline-flex;bottom:calc(18px + env(safe-area-inset-bottom,0px));} }
+
+/* ---------------- Kategori badges ---------------- */
+.kat{display:inline-block;padding:2px 8px;border-radius:999px;font-size:10.5px;font-weight:700;color:#fff;}
+.kat.PNS{background:var(--navy-800);}
+.kat.CPNS{background:var(--izin);}
+.kat.PPPK{background:var(--tugas);}
+
+/* ---------------- Absen flow ---------------- */
+.absen-steps{display:flex;gap:8px;margin-bottom:16px;flex-wrap:wrap;}
+.absen-step{flex:1;min-width:90px;text-align:center;padding:8px 6px;border-radius:var(--radius-sm);background:#F3F6FA;border:1px solid var(--border);font-size:11px;font-weight:700;color:var(--muted);}
+.absen-step.active{background:var(--navy-900);color:#fff;border-color:var(--navy-900);}
+.absen-step.done{background:var(--hadir-bg);color:var(--hadir);border-color:var(--hadir);}
+
+.method-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px;}
+@media (max-width:560px){.method-grid{grid-template-columns:1fr;}}
+.method-card{
+  border:1.5px solid var(--border);border-radius:var(--radius-lg);padding:22px 18px;text-align:center;cursor:pointer;
+  background:#fff;transition:.16s var(--ease);
+}
+.method-card:hover{border-color:var(--navy-700);box-shadow:var(--shadow-md);transform:translateY(-2px);}
+.method-card .mi{font-size:34px;margin-bottom:8px;}
+.method-card .mt{font-weight:700;font-size:14.5px;}
+.method-card .ms{font-size:11.5px;color:var(--muted);margin-top:4px;}
+
+#qrReaderBox{width:100%;max-width:420px;margin:0 auto;border-radius:var(--radius-md);overflow:hidden;border:1px solid var(--border);}
+.scan-hint{text-align:center;font-size:12.5px;color:var(--muted);margin-top:10px;}
+
+.staf-picked-card{
+  display:flex;align-items:center;gap:14px;background:#F3F6FA;border:1px solid var(--border);
+  border-radius:var(--radius-md);padding:14px 16px;margin-bottom:14px;
+}
+.staf-avatar{width:46px;height:46px;border-radius:50%;background:var(--navy-900);color:#fff;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:16px;flex-shrink:0;}
+.staf-picked-card .spc-name{font-weight:700;font-size:14.5px;}
+.staf-picked-card .spc-sub{font-size:12px;color:var(--muted);}
+
+.status-grid-big{display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:8px;margin-bottom:14px;}
+.status-big-btn{
+  border:1.5px solid var(--border);background:#fff;padding:14px 8px;border-radius:var(--radius-md);
+  font-weight:700;font-size:12.5px;cursor:pointer;transition:.15s var(--ease);text-align:center;
+}
+.status-big-btn:hover{border-color:var(--navy-700);}
+.status-big-btn.picked{color:#fff;border-color:transparent;transform:scale(1.03);box-shadow:var(--shadow-md);}
+.status-big-btn.picked.st-HADIR,.status-big-btn.picked.st-HADIR_P3K{background:var(--hadir);}
+.status-big-btn.picked.st-SAKIT{background:var(--sakit);}
+.status-big-btn.picked.st-IZIN{background:var(--izin);}
+.status-big-btn.picked.st-CUTI,.status-big-btn.picked.st-CUTI_P3K{background:var(--tugas);}
+.status-big-btn.picked.st-TUGAS_LUAR{background:#6b46c1;}
+.status-big-btn.picked.st-TK{background:var(--tk);}
+
+.sigpad-wrap{border:1.5px dashed var(--border);border-radius:var(--radius-md);background:#FBFCFE;position:relative;}
+.sigpad-wrap canvas{width:100%;height:170px;display:block;touch-action:none;border-radius:var(--radius-md);}
+.sigpad-placeholder{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;color:#B7C1CF;font-size:12.5px;pointer-events:none;}
+.sigpad-actions{display:flex;justify-content:space-between;align-items:center;margin-top:8px;font-size:12px;color:var(--muted);}
+
+.success-box{text-align:center;padding:30px 16px;}
+.success-box .sic{font-size:52px;margin-bottom:10px;}
+.success-box h3{margin:0 0 4px;font-size:18px;}
+.success-box p{color:var(--muted);font-size:13px;}
+
+/* ---------------- QR cards (kartu pegawai) ---------------- */
+.qr-toolbar{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:14px;}
+.qr-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(190px,1fr));gap:14px;}
+.qr-card{border:1px solid var(--border);border-radius:var(--radius-md);padding:14px;text-align:center;background:#fff;box-shadow:var(--shadow-sm);}
+.qr-card canvas,.qr-card img{width:120px;height:120px;margin:0 auto 8px;}
+.qr-card .qn{font-weight:700;font-size:12.5px;line-height:1.3;}
+.qr-card .qj{font-size:10.5px;color:var(--muted);margin:2px 0 8px;}
+.qr-card .qbtns{display:flex;gap:6px;justify-content:center;}
+
+/* ---------------- Sync / offline banner ---------------- */
+.offline-banner{background:#FBE7E4;border:1px solid #EFB3A8;color:#7a2416;border-radius:var(--radius-md);padding:10px 14px;margin-bottom:14px;font-size:12.5px;display:none;align-items:center;gap:8px;}
+.offline-banner.show{display:flex;}
+
+/* =====================================================================
+   CETAK — Daftar Hadir PNS, CPNS DAN PPPK (mengikuti format formulir fisik)
+   ===================================================================== */
+@media print{
+  .dh-title{text-align:center;font-size:13.5px;font-weight:800;letter-spacing:.4px;text-transform:uppercase;margin:2px 0;}
+  .dh-sub{text-align:center;font-size:11.5px;font-weight:700;margin:1px 0 10px;text-transform:uppercase;}
+  .dh-meta-row{display:flex;justify-content:space-between;font-size:11.5px;margin:8px 0 10px;font-weight:600;}
+
+  table.dh-table{width:100%;border-collapse:collapse;font-size:10px;table-layout:fixed;}
+  table.dh-table th,table.dh-table td{border:1px solid #222;padding:4px 5px;vertical-align:middle;}
+  table.dh-table thead{display:table-header-group;}
+  table.dh-table tr{page-break-inside:avoid;break-inside:avoid;}
+  table.dh-table th{background:none;border-bottom:1px solid #222;font-weight:700;text-align:center;}
+  table.dh-table td.dh-no{text-align:center;font-weight:700;}
+  table.dh-table td.dh-nama .n1{font-weight:700;display:block;}
+  table.dh-table td.dh-nama .n2{font-size:9px;color:#333;display:block;margin-top:1px;}
+  table.dh-table td.dh-gol,table.dh-table td.dh-jabatan{text-align:left;}
+  table.dh-table td.dh-ttd{text-align:left;white-space:nowrap;}
+  table.dh-table td.dh-ttd img{height:26px;vertical-align:middle;margin-left:4px;}
+  table.dh-table td.dh-ttd .dotline{display:inline-block;border-bottom:1px dotted #333;min-width:60px;}
+
+  .dh-catatan{margin-top:14px;font-size:10.5px;display:flex;gap:24px;page-break-inside:avoid;}
+  .dh-catatan .col b{display:block;margin-bottom:3px;}
+  .dh-catatan .col div{margin:1px 0;}
+
+  .dh-ttd-block{margin-top:20px;width:280px;margin-left:auto;text-align:center;font-size:11px;page-break-inside:avoid;}
+  .dh-ttd-block .jabatan-ttd{font-weight:700;text-transform:uppercase;}
+  .dh-ttd-space{height:60px;}
+  .dh-ttd-block .nama-ttd{font-weight:700;text-decoration:underline;}
+
+  .print-qr-sheet{display:grid;grid-template-columns:repeat(4,1fr);gap:10mm 6mm;}
+  .print-qr-card{border:1px dashed #888;border-radius:4mm;padding:6mm 3mm;text-align:center;page-break-inside:avoid;}
+  .print-qr-card img{width:100%;max-width:32mm;height:auto;margin-bottom:2mm;}
+  .print-qr-card .pqn{font-weight:700;font-size:10px;line-height:1.25;}
+  .print-qr-card .pqj{font-size:8.5px;color:#333;margin-top:1mm;}
+  .print-qr-card .pqnip{font-size:8px;color:#555;margin-top:.5mm;}
+}
+
+/* ---------------- Responsive tweaks specific to staff pages ---------------- */
+@media (max-width:560px){
+  .method-card{padding:18px 12px;}
+  .status-grid-big{grid-template-columns:repeat(2,1fr);}
+  .qr-grid{grid-template-columns:repeat(auto-fill,minmax(140px,1fr));}
+  .qr-card canvas,.qr-card img{width:96px;height:96px;}
+}
