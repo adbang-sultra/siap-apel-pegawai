@@ -13,6 +13,6 @@
 // =====================================================================
 
 window.SIAP_APEL_CONFIG = {
-  SUPABASE_URL: 'https://amtyvkzniqxqmopaqnxj.supabase.co',
-  SUPABASE_ANON_KEY: 'sb_publishable_Rx4qeHV785NUst4TdWsTTw_HtKt-vqa',
+  SUPABASE_URL: 'https://YOUR-PROJECT-REF.supabase.co',
+  SUPABASE_ANON_KEY: 'YOUR-ANON-PUBLIC-KEY',
 };

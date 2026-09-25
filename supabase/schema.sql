@@ -19,11 +19,16 @@ create table if not exists biro (
   id             uuid primary key default gen_random_uuid(),
   nama           text not null unique,
   urutan         integer not null default 0,
-  kepala_nama    text,
-  kepala_pangkat text,
-  kepala_nip     text,
   created_at     timestamptz not null default now()
 );
+
+-- Kolom identitas Kepala Biro — ditambahkan dengan ALTER (bukan hanya di
+-- CREATE TABLE) supaya tetap berjalan aman meskipun tabel "biro" ini
+-- sudah ada sebelumnya (mis. dibuat oleh aplikasi Versi Pejabat pada
+-- project Supabase yang sama).
+alter table biro add column if not exists kepala_nama text;
+alter table biro add column if not exists kepala_pangkat text;
+alter table biro add column if not exists kepala_nip text;
 
 insert into biro (nama, urutan) values
   ('Biro Administrasi Pimpinan', 1),
