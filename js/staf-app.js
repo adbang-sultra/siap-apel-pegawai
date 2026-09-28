@@ -1,23 +1,22 @@
 // =====================================================================
-// SIAP APEL — Logika Aplikasi Versi Pegawai
+// SIAP APEL — Logika Aplikasi Versi Pegawai (Biro Administrasi Pembangunan)
 // =====================================================================
 
 const LOGO_SULTRA = 'assets/logo.png';
-let BIRO_LIST = [];
-let BIRO_FULL = [];
 let STAF = [];
+let ORG_SETTINGS = { namaBiro: 'Biro Administrasi Pembangunan', kepalaNama: '', kepalaPangkat: '', kepalaNip: '' };
+let PEGAWAI_SESSION = null; // profil pegawai yang sedang login (role pegawai)
+let ADMIN_USERNAME = null;
 let sigPad = null;
+let sigPadPegawai = null;
 let html5QrCode = null;
+let qrRotateInterval = null;
 
 const todayStr = () => new Date().toISOString().slice(0, 10);
 const fmtTgl = (iso) => {
   const d = new Date(iso + 'T00:00:00');
   return d.toLocaleDateString('id-ID', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
 };
-function biroIndex(b) {
-  const i = BIRO_LIST.indexOf(b);
-  return i < 0 ? 999 : i;
-}
 function esc(s) {
   return (s ?? '').toString().replace(/"/g, '&quot;').replace(/</g, '&lt;');
 }
@@ -31,57 +30,233 @@ function toast(msg, type) {
 function defaultJenisApel() {
   return new Date().getHours() < 12 ? 'Apel Pagi' : 'Apel Sore';
 }
-document.getElementById('todayLabel').textContent = fmtTgl(todayStr());
 
 // ---------------- OFFLINE BANNER ----------------
 function updateOnlineStatus() {
-  document.getElementById('offlineBanner').classList.toggle('show', !navigator.onLine);
+  const el = document.getElementById('offlineBanner');
+  if (el) el.classList.toggle('show', !navigator.onLine);
 }
 window.addEventListener('online', updateOnlineStatus);
 window.addEventListener('offline', updateOnlineStatus);
-updateOnlineStatus();
 
-// ---------------- CONNECTION STATUS ----------------
-async function checkConnection() {
-  const banner = document.getElementById('configBanner');
-  const badge = document.getElementById('connBadge');
-  const badgeText = document.getElementById('connBadgeText');
-  const dot = document.getElementById('liveDot');
-  const connText = document.getElementById('connText');
-  const pengInfo = document.getElementById('pengaturanConnInfoStaf');
+// =====================================================================
+// ROTATING QR — HMAC-SHA256 berbasis waktu, berputar tiap 10 detik
+// Payload: "<stafId>.<timeSlot>.<kodeHex>"
+// =====================================================================
+function currentTimeSlot() {
+  return Math.floor(Date.now() / 10000);
+}
+async function hmacHex(secret, message) {
+  const enc = new TextEncoder();
+  const key = await crypto.subtle.importKey('raw', enc.encode(secret), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
+  const sig = await crypto.subtle.sign('HMAC', key, enc.encode(message));
+  return Array.from(new Uint8Array(sig))
+    .map((b) => b.toString(16).padStart(2, '0'))
+    .join('');
+}
+async function computeRotatingPayload(stafId, secret, slot) {
+  const code = (await hmacHex(secret, stafId + ':' + slot)).slice(0, 10);
+  return `${stafId}.${slot}.${code}`;
+}
+async function validateRotatingPayload(payload) {
+  const parts = (payload || '').split('.');
+  if (parts.length !== 3) return { ok: false, reason: 'format' };
+  const [stafId, slotStr, code] = parts;
+  const staf = STAF.find((p) => p.id === stafId);
+  if (!staf) return { ok: false, reason: 'notfound' };
+  const slot = parseInt(slotStr, 10);
+  const nowSlot = currentTimeSlot();
+  if (!Number.isFinite(slot) || Math.abs(nowSlot - slot) > 1) return { ok: false, reason: 'expired', staf };
+  const expected = (await hmacHex(staf.qrToken, stafId + ':' + slot)).slice(0, 10);
+  if (expected !== code) return { ok: false, reason: 'invalid', staf };
+  return { ok: true, staf };
+}
 
-  if (!StafDB.isConfigured()) {
-    banner.style.display = 'block';
-    badge.classList.add('off');
-    badgeText.textContent = 'Belum dikonfigurasi';
-    dot.classList.add('off');
-    connText.textContent = 'Supabase belum dikonfigurasi';
-    pengInfo.innerHTML = '⚠️ Aplikasi belum terhubung ke Supabase. Lengkapi <code>js/config.js</code> lalu muat ulang halaman.';
-    return false;
-  }
+// =====================================================================
+// SESSION / LOGIN
+// =====================================================================
+function saveSession(role, data) {
+  sessionStorage.setItem('siap_role', role);
+  sessionStorage.setItem('siap_session_data', JSON.stringify(data));
+}
+function clearSession() {
+  sessionStorage.removeItem('siap_role');
+  sessionStorage.removeItem('siap_session_data');
+}
+function loadSession() {
+  const role = sessionStorage.getItem('siap_role');
+  if (!role) return null;
   try {
-    await StafDB.listBiroFull();
-    banner.style.display = 'none';
-    badge.classList.remove('off');
-    badgeText.textContent = 'Terhubung';
-    dot.classList.remove('off');
-    connText.textContent = 'Terhubung ke Supabase';
-    pengInfo.innerHTML = '✅ Terhubung ke database Supabase.';
-    return true;
-  } catch (err) {
-    banner.style.display = 'block';
-    banner.innerHTML =
-      '⚠️ <b>Gagal terhubung ke Supabase.</b> Pastikan <code>supabase/schema.sql</code> sudah dijalankan di SQL Editor Supabase, dan periksa <code>js/config.js</code>. Detail: ' + esc(err.message);
-    badge.classList.add('off');
-    badgeText.textContent = 'Terputus';
-    dot.classList.add('off');
-    connText.textContent = 'Gagal terhubung';
-    pengInfo.innerHTML = '❌ Gagal terhubung: ' + esc(err.message);
-    return false;
+    return { role, data: JSON.parse(sessionStorage.getItem('siap_session_data') || 'null') };
+  } catch {
+    return null;
   }
 }
 
-// ---------------- SIDEBAR (mobile) ----------------
+function showScreen(which) {
+  document.getElementById('loginScreen').style.display = which === 'login' ? 'flex' : 'none';
+  document.getElementById('adminApp').style.display = which === 'admin' ? 'flex' : 'none';
+  document.getElementById('pegawaiApp').style.display = which === 'pegawai' ? 'flex' : 'none';
+}
+
+// --- Login screen: tab switching ---
+document.getElementById('tabAdmin').addEventListener('click', () => switchLoginTab('admin'));
+document.getElementById('tabPegawai').addEventListener('click', () => switchLoginTab('pegawai'));
+function switchLoginTab(which) {
+  document.getElementById('tabAdmin').classList.toggle('active', which === 'admin');
+  document.getElementById('tabPegawai').classList.toggle('active', which === 'pegawai');
+  document.getElementById('loginAdminBox').style.display = which === 'admin' ? 'block' : 'none';
+  document.getElementById('loginPegawaiBox').style.display = which === 'pegawai' ? 'block' : 'none';
+}
+
+// --- Admin login ---
+document.getElementById('btnAdminLogin').addEventListener('click', async () => {
+  const username = document.getElementById('adminUsername').value.trim();
+  const password = document.getElementById('adminPassword').value;
+  const msg = document.getElementById('adminLoginMsg');
+  msg.textContent = '';
+  if (!username || !password) {
+    msg.textContent = 'Isi username dan password.';
+    return;
+  }
+  const btn = document.getElementById('btnAdminLogin');
+  btn.disabled = true;
+  try {
+    const ok = await StafDB.adminLogin(username, password);
+    if (ok) {
+      ADMIN_USERNAME = username;
+      saveSession('admin', { username });
+      await bootAdmin();
+    } else {
+      msg.textContent = 'Username atau password salah.';
+    }
+  } catch (err) {
+    msg.textContent = 'Gagal terhubung: ' + err.message;
+  } finally {
+    btn.disabled = false;
+  }
+});
+
+// --- Pegawai login ---
+document.getElementById('btnPegawaiLogin').addEventListener('click', async () => {
+  const nip = document.getElementById('pegawaiNipLogin').value.trim();
+  const pin = document.getElementById('pegawaiPinLogin').value.trim();
+  const msg = document.getElementById('pegawaiLoginMsg');
+  msg.textContent = '';
+  if (!nip || !pin) {
+    msg.textContent = 'Isi NIP dan PIN.';
+    return;
+  }
+  const btn = document.getElementById('btnPegawaiLogin');
+  btn.disabled = true;
+  try {
+    const staf = await StafDB.stafLogin(nip, pin);
+    if (!staf) {
+      msg.textContent = 'NIP atau PIN salah, atau akun belum diaktifkan.';
+      return;
+    }
+    if (!staf.aktif) {
+      msg.textContent = 'Akun Anda berstatus tidak aktif. Hubungi Admin.';
+      return;
+    }
+    saveSession('pegawai', staf);
+    await bootPegawai(staf);
+  } catch (err) {
+    msg.textContent = 'Gagal terhubung: ' + err.message;
+  } finally {
+    btn.disabled = false;
+  }
+});
+
+// --- Aktivasi akun pegawai ---
+document.getElementById('btnKeAktivasi').addEventListener('click', () => {
+  document.getElementById('pegawaiLoginStep').style.display = 'none';
+  document.getElementById('pegawaiAktivasiStep').style.display = 'block';
+  document.getElementById('aktivasiMsg').textContent = '';
+  document.getElementById('aktivasiPinBox').style.display = 'none';
+});
+document.getElementById('btnKeLogin').addEventListener('click', () => {
+  document.getElementById('pegawaiAktivasiStep').style.display = 'none';
+  document.getElementById('pegawaiLoginStep').style.display = 'block';
+});
+document.getElementById('btnCekNip').addEventListener('click', async () => {
+  const nip = document.getElementById('aktivasiNip').value.trim();
+  const msg = document.getElementById('aktivasiMsg');
+  msg.textContent = '';
+  if (!nip) {
+    msg.textContent = 'Isi NIP terlebih dahulu.';
+    return;
+  }
+  try {
+    const res = await StafDB.stafCheckNip(nip);
+    if (!res.found) {
+      msg.textContent = 'NIP tidak ditemukan. Hubungi Admin untuk didaftarkan terlebih dahulu.';
+      document.getElementById('aktivasiPinBox').style.display = 'none';
+      return;
+    }
+    if (res.sudahAktif) {
+      msg.textContent = `Akun "${res.nama}" sudah aktif. Silakan masuk dengan PIN Anda.`;
+      document.getElementById('aktivasiPinBox').style.display = 'none';
+      return;
+    }
+    document.getElementById('aktivasiNamaInfo').textContent = `Halo, ${res.nama}! Buat PIN untuk mengaktifkan akun Anda.`;
+    document.getElementById('aktivasiPinBox').style.display = 'block';
+  } catch (err) {
+    msg.textContent = 'Gagal terhubung: ' + err.message;
+  }
+});
+document.getElementById('btnAktivasiSimpan').addEventListener('click', async () => {
+  const nip = document.getElementById('aktivasiNip').value.trim();
+  const pin1 = document.getElementById('aktivasiPin1').value.trim();
+  const pin2 = document.getElementById('aktivasiPin2').value.trim();
+  const msg = document.getElementById('aktivasiMsg');
+  if (pin1.length < 4) {
+    msg.textContent = 'PIN minimal 4 digit.';
+    return;
+  }
+  if (pin1 !== pin2) {
+    msg.textContent = 'Konfirmasi PIN tidak sama.';
+    return;
+  }
+  const btn = document.getElementById('btnAktivasiSimpan');
+  btn.disabled = true;
+  try {
+    const ok = await StafDB.stafActivate(nip, pin1);
+    if (ok) {
+      msg.className = 'login-msg ok';
+      msg.textContent = 'Akun berhasil diaktifkan! Silakan masuk.';
+      setTimeout(() => {
+        document.getElementById('btnKeLogin').click();
+        document.getElementById('pegawaiNipLogin').value = nip;
+        document.getElementById('pegawaiPinLogin').focus();
+        msg.className = 'login-msg';
+      }, 1200);
+    } else {
+      msg.className = 'login-msg';
+      msg.textContent = 'Gagal mengaktifkan. Akun mungkin sudah aktif sebelumnya.';
+    }
+  } catch (err) {
+    msg.textContent = 'Gagal terhubung: ' + err.message;
+  } finally {
+    btn.disabled = false;
+  }
+});
+
+// --- Logout ---
+document.getElementById('btnLogoutAdmin').addEventListener('click', () => {
+  stopScanner();
+  clearSession();
+  location.reload();
+});
+document.getElementById('btnLogoutPegawai').addEventListener('click', () => {
+  stopRotatingQr();
+  clearSession();
+  location.reload();
+});
+
+// =====================================================================
+// ADMIN APP
+// =====================================================================
 const sidebar = document.getElementById('sidebar');
 const sidebarOverlay = document.getElementById('sidebarOverlay');
 document.getElementById('btnHamburger').addEventListener('click', () => {
@@ -94,47 +269,81 @@ function closeSidebar() {
   sidebarOverlay.classList.remove('show');
 }
 
-// ---------------- NAVIGATION ----------------
-const PAGE_TITLES = { beranda: 'Beranda', absen: 'Absen Kehadiran', qr: 'Kartu QR Pegawai', pegawai: 'Data Pegawai', rekap: 'Rekap & Cetak', pengaturan: 'Pengaturan' };
+const PAGE_TITLES = { beranda: 'Beranda', absen: 'Absen (Scan QR)', pegawai: 'Data Pegawai', rekap: 'Rekap & Cetak', pengaturan: 'Pengaturan' };
 function gotoPage(page) {
-  document.querySelectorAll('.nav-item').forEach((b) => b.classList.remove('active'));
+  document.querySelectorAll('.nav-item[data-page]').forEach((b) => b.classList.remove('active'));
   const navBtn = document.querySelector(`.nav-item[data-page="${page}"]`);
   if (navBtn) navBtn.classList.add('active');
-  document.querySelectorAll('.page').forEach((p) => p.classList.remove('active'));
+  document.querySelectorAll('#adminApp .page').forEach((p) => p.classList.remove('active'));
   document.getElementById('page-' + page).classList.add('active');
   document.getElementById('pageTitle').textContent = PAGE_TITLES[page];
   closeSidebar();
+  if (page !== 'absen') {
+    stopScanner();
+  }
   if (page === 'beranda') renderDashboardStaf();
   if (page === 'pegawai') renderStafTable();
-  if (page === 'qr') renderQrGrid();
-  if (page === 'absen') resetAbsenFlow();
-  if (page === 'pengaturan') fillKepalaBiroForm();
-  if (page !== 'absen') stopScanner();
+  if (page === 'absen') resetAbsenPage();
+  if (page === 'pengaturan') fillPengaturanForm();
 }
-document.querySelectorAll('.nav-item[data-page]').forEach((btn) => {
-  btn.addEventListener('click', () => gotoPage(btn.dataset.page));
-});
-document.querySelectorAll('[data-go]').forEach((btn) => {
-  btn.addEventListener('click', () => gotoPage(btn.dataset.go));
-});
+document.querySelectorAll('.nav-item[data-page]').forEach((btn) => btn.addEventListener('click', () => gotoPage(btn.dataset.page)));
+document.querySelectorAll('[data-go]').forEach((btn) => btn.addEventListener('click', () => gotoPage(btn.dataset.go)));
 
-// ---------------- BIRO DROPDOWNS ----------------
-function fillBiroDropdowns() {
-  const opts = BIRO_LIST.map((b) => `<option value="${esc(b)}">${esc(b)}</option>`).join('');
-  document.getElementById('filterBiroStaf').innerHTML = '<option value="">Semua Biro</option>' + opts;
-  document.getElementById('rekapBiroStaf').innerHTML = '<option value="">Semua Biro</option>' + opts;
-  document.getElementById('qrFilterBiro').innerHTML = '<option value="">Semua Biro</option>' + opts;
-  document.getElementById('stafBiro').innerHTML = opts;
-  document.getElementById('kbBiro').innerHTML = opts;
+async function checkConnection() {
+  const banner = document.getElementById('loginConfigBanner');
+  const badge = document.getElementById('connBadge');
+  const badgeText = document.getElementById('connBadgeText');
+  const dot = document.getElementById('liveDot');
+  const connText = document.getElementById('connText');
+  const pengInfo = document.getElementById('pengaturanConnInfoStaf');
+
+  const setBanner = (html) => {
+    if (banner) {
+      banner.style.display = html ? 'block' : 'none';
+      banner.innerHTML = html || '';
+    }
+  };
+
+  if (!StafDB.isConfigured()) {
+    setBanner('⚠️ <b>Supabase belum dikonfigurasi.</b> Lengkapi <code>js/config.js</code> lalu muat ulang halaman.');
+    if (badge) {
+      badge.classList.add('off');
+      badgeText.textContent = 'Belum dikonfigurasi';
+    }
+    if (dot) dot.classList.add('off');
+    if (connText) connText.textContent = 'Supabase belum dikonfigurasi';
+    if (pengInfo) pengInfo.innerHTML = '⚠️ Supabase belum dikonfigurasi.';
+    return false;
+  }
+  try {
+    await StafDB.getOrgSettings();
+    setBanner(null);
+    if (badge) {
+      badge.classList.remove('off');
+      badgeText.textContent = 'Terhubung';
+    }
+    if (dot) dot.classList.remove('off');
+    if (connText) connText.textContent = 'Terhubung ke Supabase';
+    if (pengInfo) pengInfo.innerHTML = '✅ Terhubung ke database Supabase.';
+    return true;
+  } catch (err) {
+    setBanner('⚠️ <b>Gagal terhubung ke Supabase.</b> Pastikan <code>supabase/schema.sql</code> sudah dijalankan, dan periksa <code>js/config.js</code>. Detail: ' + esc(err.message));
+    if (badge) {
+      badge.classList.add('off');
+      badgeText.textContent = 'Terputus';
+    }
+    if (dot) dot.classList.add('off');
+    if (connText) connText.textContent = 'Gagal terhubung';
+    if (pengInfo) pengInfo.innerHTML = '❌ Gagal terhubung: ' + esc(err.message);
+    return false;
+  }
 }
 
 // ---------------- DASHBOARD ----------------
 const STATUS_COLOR_STAF = { HADIR: '#1F8A57', IZIN: '#2563A8', SAKIT: '#B8860B', CUTI: '#7A4FB5', TK: '#C0392B', TUGAS_LUAR: '#6b46c1', HADIR_P3K: '#0e7490', CUTI_P3K: '#b45309' };
-
 function statCardsHtmlStaf(c) {
   return STATUS_LIST_STAF.map((s) => `<div class="stat" style="background:${STATUS_COLOR_STAF[s]}1A;"><div class="n" style="color:${STATUS_COLOR_STAF[s]}">${c[s] || 0}</div><div class="l">${STATUS_LABEL_STAF[s]}</div></div>`).join('');
 }
-
 function renderDonutStaf(counts, totalDenom) {
   const svg = document.getElementById('donutStaf');
   const r = 15.9155, cx = 18, cy = 18, circumference = 2 * Math.PI * r;
@@ -163,7 +372,6 @@ function renderDonutStaf(counts, totalDenom) {
       .map((s) => `<div class="li"><div class="left"><span class="sw" style="background:${legendColors[s.key]}"></span>${legendLabels[s.key]}</div><b>${s.val}</b></div>`)
       .join('') || '<div class="muted">Belum ada data hari ini.</div>';
 }
-
 async function renderDashboardStaf() {
   document.getElementById('dashDateLabelStaf').textContent = '— ' + fmtTgl(todayStr());
   const totalAktif = STAF.filter((p) => p.aktif).length;
@@ -187,45 +395,49 @@ async function renderDashboardStaf() {
   }
 }
 
-// ---------------- ABSEN FLOW ----------------
-let AB = { tanggal: null, jenisApel: null, metode: null, staf: null, status: null };
+// ---------------- ABSEN (SCAN QR + TANDAI TIDAK HADIR) ----------------
+let SESI_LOG = [];
+const absenTanggalEl = document.getElementById('absenTanggal');
+const absenJenisApelEl = document.getElementById('absenJenisApel');
+absenTanggalEl.value = todayStr();
+absenJenisApelEl.value = defaultJenisApel();
+absenTanggalEl.addEventListener('change', resetSesi);
+absenJenisApelEl.addEventListener('change', resetSesi);
 
-function resetAbsenFlow() {
-  document.getElementById('absenTanggal').value = todayStr();
-  document.getElementById('absenJenisApel').value = defaultJenisApel();
-  AB = { tanggal: null, jenisApel: null, metode: null, staf: null, status: null };
-  showAbsenStep(1);
+function resetAbsenPage() {
+  document.getElementById('scanBox').style.display = 'none';
+  document.getElementById('tidakHadirBox').style.display = 'none';
+  document.getElementById('absenIdleHint').style.display = 'block';
+  resetSesi();
 }
-function showAbsenStep(target) {
-  const map = { 1: 'absenStep1', 2: 'absenStep2', scan: 'absenScanBox', manual: 'absenManualBox', 34: 'absenStep34', success: 'absenSuccessBox' };
-  Object.values(map).forEach((id) => (document.getElementById(id).style.display = 'none'));
-  document.getElementById(map[target]).style.display = 'block';
-  if (target !== 'scan') stopScanner();
-  const stepNum = target === 1 ? 1 : target === 2 ? 2 : target === 'scan' || target === 'manual' ? 3 : 4;
-  ['stepInd1', 'stepInd2', 'stepInd3', 'stepInd4'].forEach((id, i) => {
-    const el = document.getElementById(id);
-    el.classList.remove('active', 'done');
-    if (i + 1 < stepNum) el.classList.add('done');
-    else if (i + 1 === stepNum) el.classList.add('active');
-  });
+function resetSesi() {
+  SESI_LOG = [];
+  drawSesiLog();
 }
-document.getElementById('btnLanjutStep1').addEventListener('click', () => {
-  AB.tanggal = document.getElementById('absenTanggal').value;
-  AB.jenisApel = document.getElementById('absenJenisApel').value;
-  if (!AB.tanggal) {
-    alert('Pilih tanggal terlebih dahulu.');
-    return;
-  }
-  showAbsenStep(2);
-});
-document.getElementById('btnBackStep2').addEventListener('click', () => showAbsenStep(1));
+function drawSesiLog() {
+  const tbody = document.getElementById('sesiLog');
+  tbody.innerHTML =
+    SESI_LOG.map(
+      (e) => `<tr><td>${e.waktu}</td><td>${esc(e.nama)}</td><td><span class="badge" style="background:${STATUS_COLOR_STAF[e.status]}">${STATUS_LABEL_STAF[e.status]}</span></td><td>${e.metode === 'QR' ? '📷 QR' : '✋ Manual'}</td></tr>`
+    ).join('') || '<tr><td colspan="4" class="muted">Belum ada catatan pada sesi ini.</td></tr>';
+}
+function logSesi(nama, status, metode) {
+  SESI_LOG.unshift({ waktu: new Date().toLocaleTimeString('id-ID'), nama, status, metode });
+  drawSesiLog();
+}
 
 // --- Scan QR ---
-document.getElementById('cardScanQr').addEventListener('click', () => {
-  showAbsenStep('scan');
+document.getElementById('btnMulaiScan').addEventListener('click', () => {
+  document.getElementById('tidakHadirBox').style.display = 'none';
+  document.getElementById('absenIdleHint').style.display = 'none';
+  document.getElementById('scanBox').style.display = 'block';
   startScanner();
 });
-document.getElementById('btnBatalScan').addEventListener('click', () => showAbsenStep(2));
+document.getElementById('btnStopScan').addEventListener('click', () => {
+  stopScanner();
+  document.getElementById('scanBox').style.display = 'none';
+  document.getElementById('absenIdleHint').style.display = 'block';
+});
 function startScanner() {
   const hint = document.getElementById('scanHint');
   hint.textContent = 'Meminta izin kamera...';
@@ -236,7 +448,7 @@ function startScanner() {
   html5QrCode = new Html5Qrcode('qrReader');
   html5QrCode
     .start({ facingMode: 'environment' }, { fps: 10, qrbox: 230 }, onScanSuccess, () => {})
-    .then(() => (hint.textContent = 'Arahkan kamera ke kartu QR pegawai'))
+    .then(() => (hint.textContent = 'Arahkan kamera ke QR di layar pegawai — kamera tetap aktif untuk pegawai berikutnya.'))
     .catch((err) => {
       hint.textContent = 'Gagal mengakses kamera: ' + err;
     });
@@ -251,249 +463,153 @@ function stopScanner() {
       .catch(() => {});
   }
 }
+let lastScan = { text: null, time: 0 };
+function flashScan(icon, name, sub, isError) {
+  const el = document.getElementById('scanFlash');
+  el.className = 'scan-flash show' + (isError ? ' err' : '');
+  el.innerHTML = `<div class="sf-icon">${icon}</div><div class="sf-name">${esc(name)}</div><div class="sf-sub">${esc(sub)}</div>`;
+  clearTimeout(window._flashTimer);
+  window._flashTimer = setTimeout(() => el.classList.remove('show'), 1400);
+}
 async function onScanSuccess(decodedText) {
-  stopScanner();
+  const now = Date.now();
+  if (decodedText === lastScan.text && now - lastScan.time < 4000) return;
+  lastScan = { text: decodedText, time: now };
   try {
-    const staf = await StafDB.getStafByToken(decodedText.trim());
-    if (!staf) {
-      toast('QR tidak dikenali / pegawai tidak ditemukan.', 'error');
-      showAbsenStep(2);
+    const res = await validateRotatingPayload(decodedText);
+    if (!res.ok) {
+      const msgs = { notfound: 'QR tidak dikenali.', expired: 'QR sudah kedaluwarsa — minta pegawai buka ulang halaman QR.', invalid: 'Kode QR tidak valid.', format: 'Format QR tidak dikenali.' };
+      flashScan('⚠️', res.staf ? res.staf.nama : 'Gagal', msgs[res.reason] || 'Coba pindai ulang.', true);
       return;
     }
+    const staf = res.staf;
     if (!staf.aktif) {
-      toast('Pegawai ini berstatus tidak aktif.', 'error');
-      showAbsenStep(2);
+      flashScan('🚫', staf.nama, 'Status pegawai tidak aktif.', true);
       return;
     }
-    AB.staf = staf;
-    AB.metode = 'QR';
-    await enterStep34();
+    const tanggal = absenTanggalEl.value;
+    const jenisApel = absenJenisApelEl.value;
+    const status = staf.kategori === 'PPPK' ? 'HADIR_P3K' : 'HADIR';
+    await StafDB.upsertKehadiranSatu({
+      tanggal,
+      jenisApel,
+      stafId: staf.id,
+      status,
+      keterangan: '',
+      tandaTangan: staf.tandaTangan || null,
+      metode: 'QR',
+    });
+    const sub = staf.tandaTangan ? 'Kehadiran tercatat ✓ tanda tangan tersimpan' : 'Kehadiran tercatat — pegawai belum menyimpan tanda tangan';
+    flashScan('✅', staf.nama, sub, false);
+    logSesi(staf.nama, status, 'QR');
+    renderDashboardStaf();
   } catch (err) {
-    toast('Gagal memproses QR: ' + err.message, 'error');
-    showAbsenStep(2);
+    flashScan('⚠️', 'Gagal', err.message, true);
   }
 }
 
-// --- Manual ---
-document.getElementById('cardManual').addEventListener('click', () => {
-  showAbsenStep('manual');
-  drawAbsenStafList();
-  document.getElementById('absenSearchStaf').value = '';
-  document.getElementById('absenSearchStaf').focus();
+// --- Tandai Tidak Hadir ---
+document.getElementById('btnBukaTidakHadir').addEventListener('click', () => {
+  stopScanner();
+  document.getElementById('scanBox').style.display = 'none';
+  document.getElementById('absenIdleHint').style.display = 'none';
+  document.getElementById('tidakHadirBox').style.display = 'block';
+  document.getElementById('tidakHadirPicked').style.display = 'none';
+  document.getElementById('tidakHadirCloseWrap').style.display = 'flex';
+  document.getElementById('tidakHadirSearch').value = '';
+  drawTidakHadirList();
 });
-document.getElementById('btnBatalManual').addEventListener('click', () => showAbsenStep(2));
-document.getElementById('absenSearchStaf').addEventListener('input', drawAbsenStafList);
-function drawAbsenStafList() {
-  const q = (document.getElementById('absenSearchStaf').value || '').toLowerCase();
+document.getElementById('btnTutupTidakHadir').addEventListener('click', () => {
+  document.getElementById('tidakHadirBox').style.display = 'none';
+  document.getElementById('absenIdleHint').style.display = 'block';
+});
+document.getElementById('tidakHadirSearch').addEventListener('input', drawTidakHadirList);
+function drawTidakHadirList() {
+  const q = (document.getElementById('tidakHadirSearch').value || '').toLowerCase();
   const list = STAF.filter((p) => p.aktif && (p.nama.toLowerCase().includes(q) || p.nip.includes(q))).sort((a, b) => a.nama.localeCompare(b.nama));
-  document.getElementById('absenStafList').innerHTML =
+  document.getElementById('tidakHadirList').innerHTML =
     list
       .slice(0, 100)
-      .map((p) => `<tr style="cursor:pointer;" onclick="pickStafManual('${p.id}')"><td style="width:40px;"><div class="staf-avatar" style="width:32px;height:32px;font-size:12px;">${esc(p.nama[0])}</div></td><td><b>${esc(p.nama)}</b><br><span class="muted">${esc(p.jabatan)} — ${esc(p.biro)}</span></td></tr>`)
+      .map((p) => `<tr style="cursor:pointer;" onclick="pickTidakHadir('${p.id}')"><td style="width:40px;"><div class="staf-avatar" style="width:32px;height:32px;font-size:12px;">${esc(p.nama[0])}</div></td><td><b>${esc(p.nama)}</b><br><span class="muted">${esc(p.jabatan)}</span></td></tr>`)
       .join('') || '<tr><td class="muted">Tidak ditemukan.</td></tr>';
 }
-window.pickStafManual = async (id) => {
-  AB.staf = STAF.find((p) => p.id === id);
-  AB.metode = 'MANUAL';
-  await enterStep34();
+let TH_PICKED = null;
+window.pickTidakHadir = (id) => {
+  TH_PICKED = STAF.find((p) => p.id === id);
+  document.getElementById('tidakHadirPickedCard').innerHTML = `<div class="staf-avatar">${esc(TH_PICKED.nama[0])}</div><div><div class="spc-name">${esc(TH_PICKED.nama)}</div><div class="spc-sub">${esc(TH_PICKED.jabatan)} · Gol. ${esc(TH_PICKED.golongan)} <span class="kat ${TH_PICKED.kategori}">${TH_PICKED.kategori}</span></div></div>`;
+  const list = TH_PICKED.kategori === 'PPPK' ? STATUS_TIDAK_HADIR : STATUS_TIDAK_HADIR.filter((s) => s !== 'CUTI_P3K');
+  document.getElementById('tidakHadirStatusGrid').innerHTML = list.map((s) => `<button type="button" class="status-big-btn st-${s}" data-status="${s}" onclick="pickTidakHadirStatus('${s}')">${STATUS_LABEL_STAF[s]}</button>`).join('');
+  TH_STATUS = null;
+  document.getElementById('tidakHadirKeterangan').value = '';
+  document.getElementById('tidakHadirBox').querySelector('.table-wrap').style.display = 'none';
+  document.getElementById('tidakHadirSearch').parentElement.style.display = 'none';
+  document.getElementById('tidakHadirCloseWrap').style.display = 'none';
+  document.getElementById('tidakHadirPicked').style.display = 'block';
 };
-
-// --- Step 3/4: pilih status + ttd ---
-async function enterStep34() {
-  const p = AB.staf;
-  document.getElementById('stafPickedCard').innerHTML = `
-    <div class="staf-avatar">${esc(p.nama[0])}</div>
-    <div>
-      <div class="spc-name">${esc(p.nama)}</div>
-      <div class="spc-sub">${esc(p.jabatan)} · Gol. ${esc(p.golongan)} <span class="kat ${p.kategori}">${p.kategori}</span></div>
-      <div class="spc-sub">${esc(p.biro)} — NIP ${esc(p.nip)}</div>
-    </div>`;
-
-  const notice = document.getElementById('absenExistingNotice');
-  notice.style.display = 'none';
-  try {
-    const existing = await StafDB.getKehadiranStafSatu(AB.tanggal, AB.jenisApel, p.id);
-    if (existing) {
-      notice.style.display = 'block';
-      notice.textContent = `Sudah tercatat sebelumnya: ${STATUS_LABEL_STAF[existing.status]} (${new Date(existing.waktuInput).toLocaleTimeString('id-ID')}). Menyimpan lagi akan memperbarui data ini.`;
-    }
-  } catch (err) {
-    console.warn(err);
-  }
-
-  const statusList = p.kategori === 'PPPK' ? STATUS_LIST_STAF : STATUS_LIST_STAF.filter((s) => s !== 'HADIR_P3K' && s !== 'CUTI_P3K');
-  document.getElementById('statusGridBig').innerHTML = statusList.map((s) => `<button type="button" class="status-big-btn st-${s}" data-status="${s}" onclick="pickStatus('${s}')">${STATUS_LABEL_STAF[s]}</button>`).join('');
-  AB.status = null;
-  document.getElementById('sigBox').style.display = 'none';
-  document.getElementById('ketBox').style.display = 'none';
-  document.getElementById('absenKeterangan').value = '';
-  showAbsenStep(34);
-}
-window.pickStatus = (status) => {
-  AB.status = status;
-  document.querySelectorAll('.status-big-btn').forEach((b) => b.classList.toggle('picked', b.dataset.status === status));
-  const needSig = STATUS_HADIR_FISIK.includes(status);
-  document.getElementById('sigBox').style.display = needSig ? 'block' : 'none';
-  document.getElementById('ketBox').style.display = needSig ? 'none' : 'block';
-  if (needSig) {
-    if (sigPad) sigPad.destroy();
-    const canvas = document.getElementById('sigCanvas');
-    sigPad = createSignaturePad(canvas);
-    const ph = document.getElementById('sigPlaceholder');
-    ph.style.display = 'flex';
-    canvas.addEventListener(
-      'pointerdown',
-      () => {
-        ph.style.display = 'none';
-      },
-      { once: true }
-    );
-  }
+let TH_STATUS = null;
+window.pickTidakHadirStatus = (s) => {
+  TH_STATUS = s;
+  document.querySelectorAll('#tidakHadirStatusGrid .status-big-btn').forEach((b) => b.classList.toggle('picked', b.dataset.status === s));
 };
-document.getElementById('btnClearSig').addEventListener('click', () => {
-  if (sigPad) sigPad.clear();
-  document.getElementById('sigPlaceholder').style.display = 'flex';
+document.getElementById('btnBatalTidakHadir').addEventListener('click', () => {
+  document.getElementById('tidakHadirPicked').style.display = 'none';
+  document.getElementById('tidakHadirBox').querySelector('.table-wrap').style.display = 'block';
+  document.getElementById('tidakHadirSearch').parentElement.style.display = 'block';
+  document.getElementById('tidakHadirCloseWrap').style.display = 'flex';
 });
-document.getElementById('btnBatalStep34').addEventListener('click', () => showAbsenStep(2));
-
-document.getElementById('btnSimpanAbsen').addEventListener('click', async () => {
-  if (!AB.status) {
-    alert('Pilih status kehadiran terlebih dahulu.');
+document.getElementById('btnSimpanTidakHadir').addEventListener('click', async () => {
+  if (!TH_STATUS) {
+    alert('Pilih alasan tidak hadir terlebih dahulu.');
     return;
   }
-  const needSig = STATUS_HADIR_FISIK.includes(AB.status);
-  if (needSig && (!sigPad || sigPad.isEmpty())) {
-    alert('Mohon tanda tangan terlebih dahulu.');
-    return;
-  }
-  const btn = document.getElementById('btnSimpanAbsen');
-  const original = btn.innerHTML;
+  const btn = document.getElementById('btnSimpanTidakHadir');
   btn.disabled = true;
-  btn.innerHTML = '<span class="spinner"></span> Menyimpan...';
   try {
-    const entry = {
-      tanggal: AB.tanggal,
-      jenisApel: AB.jenisApel,
-      stafId: AB.staf.id,
-      status: AB.status,
-      keterangan: needSig ? '' : document.getElementById('absenKeterangan').value || (AB.status === 'TK' ? '-' : ''),
-      tandaTangan: needSig ? sigPad.toDataURL() : null,
-      metode: AB.metode || 'MANUAL',
-    };
-    await StafDB.upsertKehadiranSatu(entry);
-    document.getElementById('successDetail').textContent = `${AB.staf.nama} — ${STATUS_LABEL_STAF[AB.status]} — ${AB.jenisApel} — ${fmtTgl(AB.tanggal)}`;
-    showAbsenStep('success');
+    await StafDB.upsertKehadiranSatu({
+      tanggal: absenTanggalEl.value,
+      jenisApel: absenJenisApelEl.value,
+      stafId: TH_PICKED.id,
+      status: TH_STATUS,
+      keterangan: document.getElementById('tidakHadirKeterangan').value || (TH_STATUS === 'TK' ? '-' : ''),
+      tandaTangan: null,
+      metode: 'MANUAL',
+    });
+    logSesi(TH_PICKED.nama, TH_STATUS, 'MANUAL');
+    toast(`${TH_PICKED.nama} dicatat sebagai ${STATUS_LABEL_STAF[TH_STATUS]}.`);
     renderDashboardStaf();
+    document.getElementById('btnBatalTidakHadir').click();
+    document.getElementById('tidakHadirSearch').value = '';
+    drawTidakHadirList();
   } catch (err) {
     toast('Gagal menyimpan: ' + err.message, 'error');
   } finally {
     btn.disabled = false;
-    btn.innerHTML = original;
-  }
-});
-document.getElementById('btnAbsenLagi').addEventListener('click', () => {
-  AB.staf = null;
-  AB.status = null;
-  showAbsenStep(2);
-});
-
-// ---------------- KARTU QR ----------------
-async function renderQrGrid() {
-  const q = (document.getElementById('qrSearch').value || '').toLowerCase();
-  const biro = document.getElementById('qrFilterBiro').value;
-  const list = STAF.filter((p) => p.aktif && (p.nama.toLowerCase().includes(q) || p.nip.includes(q)) && (!biro || p.biro === biro)).sort((a, b) => a.nama.localeCompare(b.nama));
-  const grid = document.getElementById('qrGrid');
-  grid.innerHTML =
-    list.map((p) => `<div class="qr-card" data-id="${p.id}" style="cursor:pointer;"><canvas id="qrc_${p.id}"></canvas><div class="qn">${esc(p.nama)}</div><div class="qj">${esc(p.jabatan)}</div></div>`).join('') ||
-    '<p class="muted">Tidak ada data.</p>';
-  list.forEach((p) => {
-    const c = document.getElementById('qrc_' + p.id);
-    if (c && window.QRCode) QRCode.toCanvas(c, p.qrToken, { width: 120, margin: 1, color: { dark: '#0F2A47', light: '#FFFFFF' } }, () => {});
-  });
-  grid.querySelectorAll('.qr-card').forEach((card) => card.addEventListener('click', () => openQrSatu(card.dataset.id)));
-}
-document.getElementById('qrSearch').addEventListener('input', renderQrGrid);
-document.getElementById('qrFilterBiro').addEventListener('change', renderQrGrid);
-
-let qrSatuId = null;
-async function openQrSatu(id) {
-  const p = STAF.find((x) => x.id === id);
-  if (!p) return;
-  qrSatuId = id;
-  document.getElementById('qrSatuContent').innerHTML = `<canvas id="qrSatuCanvas"></canvas><div class="qn" style="font-size:14px;">${esc(p.nama)}</div><div class="qj">${esc(p.jabatan)} — ${esc(p.biro)}</div><div class="qj">NIP ${esc(p.nip)}</div>`;
-  document.getElementById('modalQrSatu').classList.remove('hidden');
-  const c = document.getElementById('qrSatuCanvas');
-  if (window.QRCode) QRCode.toCanvas(c, p.qrToken, { width: 200, margin: 1, color: { dark: '#0F2A47', light: '#FFFFFF' } }, () => {});
-}
-document.getElementById('btnTutupQrSatu').addEventListener('click', () => document.getElementById('modalQrSatu').classList.add('hidden'));
-document.getElementById('btnRegenQr').addEventListener('click', async () => {
-  if (!confirm('Buat ulang kode QR untuk pegawai ini? Kartu QR lama tidak akan berfungsi lagi.')) return;
-  try {
-    const updated = await StafDB.regenerateQrToken(qrSatuId);
-    const idx = STAF.findIndex((x) => x.id === qrSatuId);
-    STAF[idx] = updated;
-    openQrSatu(qrSatuId);
-    renderQrGrid();
-    toast('Kode QR berhasil diperbarui.');
-  } catch (err) {
-    toast('Gagal membuat ulang QR: ' + err.message, 'error');
-  }
-});
-document.getElementById('btnCetakSemuaQr').addEventListener('click', async () => {
-  const q = (document.getElementById('qrSearch').value || '').toLowerCase();
-  const biro = document.getElementById('qrFilterBiro').value;
-  const list = STAF.filter((p) => p.aktif && (p.nama.toLowerCase().includes(q) || p.nip.includes(q)) && (!biro || p.biro === biro)).sort((a, b) => a.nama.localeCompare(b.nama));
-  if (!list.length) {
-    alert('Tidak ada data untuk dicetak.');
-    return;
-  }
-  toast('Menyiapkan kartu QR untuk dicetak...');
-  try {
-    const cards = await Promise.all(
-      list.map(async (p) => {
-        const url = await QRCode.toDataURL(p.qrToken, { width: 200, margin: 1 });
-        return `<div class="print-qr-card"><img src="${url}"><div class="pqn">${esc(p.nama)}</div><div class="pqj">${esc(p.jabatan)}</div><div class="pqnip">NIP ${esc(p.nip)}</div></div>`;
-      })
-    );
-    doPrint(`<div class="print-qr-sheet">${cards.join('')}</div>`, false);
-  } catch (err) {
-    toast('Gagal membuat kartu QR: ' + err.message, 'error');
   }
 });
 
-// ---------------- DATA PEGAWAI ----------------
+// ---------------- DATA PEGAWAI (Admin) ----------------
 function renderStafTable() {
   const q = (document.getElementById('searchStaf').value || '').toLowerCase();
-  const biroFilter = document.getElementById('filterBiroStaf').value;
   const kat = document.getElementById('filterKategori').value;
   const tbody = document.getElementById('tabelStaf');
-  const rows = STAF.filter((p) => (p.nama.toLowerCase().includes(q) || p.nip.includes(q)) && (!biroFilter || p.biro === biroFilter) && (!kat || p.kategori === kat));
-  const biros = biroFilter ? [biroFilter] : BIRO_LIST.filter((b) => rows.some((p) => p.biro === b));
-  let no = 0,
-    html = '';
-  biros.forEach((biro) => {
-    const list = rows.filter((p) => p.biro === biro).sort((a, b) => a.nama.localeCompare(b.nama));
-    if (!list.length) return;
-    html += `<tr class="group-row"><td colspan="8">${esc(biro)} <span class="muted" style="font-weight:400;">(${list.length} pegawai)</span></td></tr>`;
-    html += list
-      .map((p) => {
-        no++;
-        return `<tr>
-      <td>${no}</td><td>${esc(p.nama)}</td><td>${esc(p.nip)}</td><td>${esc(p.golongan)}</td><td><span class="kat ${p.kategori}">${p.kategori}</span></td><td>${esc(p.jabatan)}</td>
+  const rows = STAF.filter((p) => (p.nama.toLowerCase().includes(q) || p.nip.includes(q)) && (!kat || p.kategori === kat)).sort((a, b) => a.nama.localeCompare(b.nama));
+  tbody.innerHTML =
+    rows
+      .map(
+        (p, i) => `<tr>
+      <td>${i + 1}</td><td>${esc(p.nama)}</td><td>${esc(p.nip)}</td><td>${esc(p.golongan)}</td><td><span class="kat ${p.kategori}">${p.kategori}</span></td><td>${esc(p.jabatan)}</td>
+      <td>${p.punyaPin ? '✅ Aktif' : '⏳ Belum aktivasi'}</td>
+      <td>${p.tandaTangan ? '✔️' : '—'}</td>
       <td><span class="badge ${p.aktif ? 'aktif' : 'nonaktif'}">${p.aktif ? 'Aktif' : 'Tidak Aktif'}</span></td>
       <td>
         <button class="btn small outline" onclick="editStaf('${p.id}')">Edit</button>
-        <button class="btn small outline" onclick="openQrSatu('${p.id}')">QR</button>
         <button class="btn small ${p.aktif ? 'outline' : 'gold'}" onclick="toggleAktifStaf('${p.id}')">${p.aktif ? 'Nonaktifkan' : 'Aktifkan'}</button>
         <button class="btn small danger" onclick="hapusStaf('${p.id}')">Hapus</button>
-      </td></tr>`;
-      })
-      .join('');
-  });
-  tbody.innerHTML = html || '<tr><td colspan="8" class="muted">Tidak ada data.</td></tr>';
+      </td></tr>`
+      )
+      .join('') || '<tr><td colspan="10" class="muted">Tidak ada data.</td></tr>';
 }
 document.getElementById('searchStaf').addEventListener('input', renderStafTable);
-document.getElementById('filterBiroStaf').addEventListener('change', renderStafTable);
 document.getElementById('filterKategori').addEventListener('change', renderStafTable);
 document.getElementById('btnTambahStaf').addEventListener('click', () => openModalStaf());
 document.getElementById('btnBatalStaf').addEventListener('click', () => document.getElementById('modalStaf').classList.add('hidden'));
@@ -505,19 +621,23 @@ function openModalStaf(p) {
   document.getElementById('stafNip').value = p ? p.nip : '';
   document.getElementById('stafGolongan').value = p ? p.golongan : '';
   document.getElementById('stafKategori').value = p ? p.kategori : 'PNS';
-  document.getElementById('stafBiro').value = p ? p.biro : BIRO_LIST[0];
   document.getElementById('stafJabatan').value = p ? p.jabatan : '';
   document.getElementById('stafAktif').value = p ? (p.aktif ? '1' : '0') : '1';
+  document.getElementById('btnResetPinModal').style.display = p ? 'inline-flex' : 'none';
   document.getElementById('modalStaf').classList.remove('hidden');
 }
 window.editStaf = (id) => openModalStaf(STAF.find((p) => p.id === id));
 window.toggleAktifStaf = async (id) => {
   const p = STAF.find((x) => x.id === id);
   const next = !p.aktif;
-  await StafDB.setAktifStaf(id, next).catch((err) => toast('Gagal: ' + err.message, 'error'));
-  p.aktif = next;
-  renderStafTable();
-  toast('Status pegawai diperbarui.');
+  try {
+    await StafDB.setAktifStaf(id, next);
+    p.aktif = next;
+    renderStafTable();
+    toast('Status pegawai diperbarui.');
+  } catch (err) {
+    toast('Gagal: ' + err.message, 'error');
+  }
 };
 window.hapusStaf = async (id) => {
   if (!confirm('Hapus pegawai ini? Seluruh riwayat kehadiran & tanda tangannya akan ikut terhapus permanen.')) return;
@@ -530,13 +650,26 @@ window.hapusStaf = async (id) => {
     toast('Gagal menghapus: ' + err.message, 'error');
   }
 };
+document.getElementById('btnResetPinModal').addEventListener('click', async () => {
+  const id = document.getElementById('stafId').value;
+  if (!id) return;
+  if (!confirm('Reset PIN pegawai ini? Pegawai perlu aktivasi ulang dengan PIN baru.')) return;
+  try {
+    await StafDB.adminResetPin(id);
+    const idx = STAF.findIndex((x) => x.id === id);
+    if (idx >= 0) STAF[idx].punyaPin = false;
+    renderStafTable();
+    toast('PIN pegawai berhasil direset.');
+  } catch (err) {
+    toast('Gagal: ' + err.message, 'error');
+  }
+});
 document.getElementById('btnSimpanStaf').addEventListener('click', async () => {
   const id = document.getElementById('stafId').value;
   const nama = document.getElementById('stafNama').value.trim();
   const nip = document.getElementById('stafNip').value.trim();
   const golongan = document.getElementById('stafGolongan').value.trim() || '-';
   const kategori = document.getElementById('stafKategori').value;
-  const biro = document.getElementById('stafBiro').value;
   const jabatan = document.getElementById('stafJabatan').value.trim();
   if (!nama || !nip || !jabatan) {
     alert('Nama, NIP, dan Jabatan wajib diisi.');
@@ -547,11 +680,11 @@ document.getElementById('btnSimpanStaf').addEventListener('click', async () => {
   btn.disabled = true;
   try {
     if (id) {
-      const updated = await StafDB.updateStaf(id, { nama, nip, golongan, kategori, biro, jabatan, aktif });
+      const updated = await StafDB.updateStaf(id, { nama, nip, golongan, kategori, jabatan, aktif });
       const idx = STAF.findIndex((x) => x.id === id);
-      STAF[idx] = updated;
+      STAF[idx] = { ...STAF[idx], ...updated };
     } else {
-      const created = await StafDB.insertStaf({ nama, nip, golongan, kategori, biro, jabatan, aktif });
+      const created = await StafDB.insertStaf({ nama, nip, golongan, kategori, jabatan, aktif });
       STAF.push(created);
     }
     document.getElementById('modalStaf').classList.add('hidden');
@@ -564,7 +697,7 @@ document.getElementById('btnSimpanStaf').addEventListener('click', async () => {
   }
 });
 
-// ---------------- REKAP & CETAK ----------------
+// ---------------- REKAP & CETAK (Admin) ----------------
 const rekapTglSatuStaf = document.getElementById('rekapTglSatuStaf');
 rekapTglSatuStaf.value = todayStr();
 document.getElementById('rekapJenisApelStaf').value = defaultJenisApel();
@@ -584,11 +717,9 @@ document.getElementById('rekapModeStaf').addEventListener('change', (e) => {
   document.getElementById('rekapSampaiWrapStaf').style.display = isRange ? 'block' : 'none';
   document.getElementById('btnCetakDaftarHadir').textContent = isRange ? '🖨️ Cetak Rekap' : '🖨️ Cetak Daftar Hadir';
 });
-
 async function getRekapDataStaf() {
   const mode = document.getElementById('rekapModeStaf').value;
   const jenisApel = document.getElementById('rekapJenisApelStaf').value;
-  const biro = document.getElementById('rekapBiroStaf').value;
   let dari, sampai;
   if (mode === 'harian') {
     dari = sampai = rekapTglSatuStaf.value;
@@ -601,39 +732,32 @@ async function getRekapDataStaf() {
     return null;
   }
   const raw = await StafDB.listKehadiranStaf({ dari, sampai, jenisApel: jenisApel || undefined });
-  const rows = raw.map((k) => ({ ...k, staf: STAF.find((p) => p.id === k.stafId) })).filter((k) => k.staf && (!biro || k.staf.biro === biro));
-  return { mode, dari, sampai, jenisApel, biro, rows };
+  const rows = raw.map((k) => ({ ...k, staf: STAF.find((p) => p.id === k.stafId) })).filter((k) => k.staf);
+  return { mode, dari, sampai, jenisApel, rows };
 }
 function renderRekapHarianStaf(data) {
-  const rows = data.rows.slice().sort((a, b) => biroIndex(a.staf.biro) - biroIndex(b.staf.biro) || a.staf.nama.localeCompare(b.staf.nama));
+  const rows = data.rows.slice().sort((a, b) => a.staf.nama.localeCompare(b.staf.nama));
   const body =
     rows
-      .map(
-        (r, i) =>
-          `<tr><td>${i + 1}</td><td>${esc(r.staf.biro)}</td><td>${esc(r.staf.nama)}</td><td>${esc(r.staf.golongan)}</td><td>${esc(r.staf.jabatan)}</td><td><span class="badge" style="background:${STATUS_COLOR_STAF[r.status]}">${STATUS_LABEL_STAF[r.status]}</span></td><td>${r.tandaTangan ? '✔️ Sudah TTD' : '—'}</td></tr>`
-      )
-      .join('') || '<tr><td colspan="7" class="muted">Tidak ada data pada periode ini.</td></tr>';
+      .map((r, i) => `<tr><td>${i + 1}</td><td>${esc(r.staf.nama)}</td><td>${esc(r.staf.golongan)}</td><td>${esc(r.staf.jabatan)}</td><td><span class="badge" style="background:${STATUS_COLOR_STAF[r.status]}">${STATUS_LABEL_STAF[r.status]}</span></td><td>${r.tandaTangan ? '✔️ Ada' : '—'}</td></tr>`)
+      .join('') || '<tr><td colspan="6" class="muted">Tidak ada data pada periode ini.</td></tr>';
   const c = Object.fromEntries(STATUS_LIST_STAF.map((s) => [s, 0]));
   rows.forEach((r) => c[r.status]++);
-  return `<div class="table-wrap"><table><thead><tr><th>No</th><th>Biro</th><th>Nama</th><th>Gol</th><th>Jabatan</th><th>Status</th><th>Tanda Tangan</th></tr></thead><tbody>${body}</tbody></table></div>
+  return `<div class="table-wrap"><table><thead><tr><th>No</th><th>Nama</th><th>Gol</th><th>Jabatan</th><th>Status</th><th>Tanda Tangan</th></tr></thead><tbody>${body}</tbody></table></div>
   <div class="grid-cards" style="margin-top:14px;">${statCardsHtmlStaf(c)}</div>`;
 }
 function renderRekapRangeStaf(data) {
   const byStaf = {};
   data.rows.forEach((r) => {
-    if (!byStaf[r.stafId]) byStaf[r.stafId] = { staf: r.staf, ...Object.fromEntries(STATUS_LIST_STAF.map((s) => [s, 0])), total: 0 };
+    if (!byStaf[r.stafId]) byStaf[r.stafId] = { staf: r.staf, ...Object.fromEntries(STATUS_LIST_STAF.map((s) => [s, 0])) };
     byStaf[r.stafId][r.status]++;
-    byStaf[r.stafId].total++;
   });
-  const arr = Object.values(byStaf).sort((a, b) => biroIndex(a.staf.biro) - biroIndex(b.staf.biro) || a.staf.nama.localeCompare(b.staf.nama));
+  const arr = Object.values(byStaf).sort((a, b) => a.staf.nama.localeCompare(b.staf.nama));
   const head = STATUS_LIST_STAF.map((s) => `<th>${STATUS_LABEL_STAF[s]}</th>`).join('');
-  const body =
-    arr
-      .map((r, i) => `<tr><td>${i + 1}</td><td>${esc(r.staf.biro)}</td><td>${esc(r.staf.nama)}</td>${STATUS_LIST_STAF.map((s) => `<td>${r[s]}</td>`).join('')}</tr>`)
-      .join('') || `<tr><td colspan="${3 + STATUS_LIST_STAF.length}" class="muted">Tidak ada data pada periode ini.</td></tr>`;
+  const body = arr.map((r, i) => `<tr><td>${i + 1}</td><td>${esc(r.staf.nama)}</td>${STATUS_LIST_STAF.map((s) => `<td>${r[s]}</td>`).join('')}</tr>`).join('') || `<tr><td colspan="${2 + STATUS_LIST_STAF.length}" class="muted">Tidak ada data.</td></tr>`;
   const tot = Object.fromEntries(STATUS_LIST_STAF.map((s) => [s, 0]));
   data.rows.forEach((r) => tot[r.status]++);
-  return `<div class="table-wrap"><table><thead><tr><th>No</th><th>Biro</th><th>Nama</th>${head}</tr></thead><tbody>${body}</tbody></table></div>
+  return `<div class="table-wrap"><table><thead><tr><th>No</th><th>Nama</th>${head}</tr></thead><tbody>${body}</tbody></table></div>
   <div class="grid-cards" style="margin-top:14px;">${statCardsHtmlStaf(tot)}</div>`;
 }
 let lastRekapStaf = null;
@@ -663,11 +787,10 @@ function doPrint(html, landscape) {
 function letterheadGeneric(title, sub) {
   return `<div class="print-kop">
     <img src="${LOGO_SULTRA}" alt="Logo Sulawesi Tenggara">
-    <div class="kop-text"><h3>PEMERINTAH PROVINSI SULAWESI TENGGARA</h3><h4>SEKRETARIAT DAERAH</h4><div class="kop-addr">Jl. Ahmad Yani No. 1, Kendari, Sulawesi Tenggara</div></div>
+    <div class="kop-text"><h3>PEMERINTAH PROVINSI SULAWESI TENGGARA</h3><h4>SEKRETARIAT DAERAH</h4><div class="kop-addr">${esc(ORG_SETTINGS.namaBiro)}</div></div>
   </div><div class="print-doctitle"><div class="t1">${title}</div><div class="t2">${sub}</div></div>`;
 }
-function buildDaftarHadirHtml({ tanggal, jenisApel, biro, rows }) {
-  const biroInfo = BIRO_FULL.find((b) => b.nama === biro) || {};
+function buildDaftarHadirHtml({ tanggal, jenisApel, rows }) {
   const sorted = rows.slice().sort((a, b) => a.staf.nama.localeCompare(b.staf.nama));
   let no = 0;
   const body = sorted
@@ -702,25 +825,20 @@ function buildDaftarHadirHtml({ tanggal, jenisApel, biro, rows }) {
     </div>
   </div>`;
   const sign = `<div class="dh-ttd-block">
-    <div class="jabatan-ttd">KEPALA ${esc(biro).toUpperCase()}<br>SETDA PROVINSI SULAWESI TENGGARA</div>
+    <div class="jabatan-ttd">KEPALA ${esc(ORG_SETTINGS.namaBiro).toUpperCase()}<br>SETDA PROVINSI SULAWESI TENGGARA</div>
     <div class="dh-ttd-space"></div>
-    <div class="nama-ttd">${esc(biroInfo.kepalaNama) || '..............................................'}</div>
-    <div>${esc(biroInfo.kepalaPangkat) || ''}</div>
-    <div>NIP. ${esc(biroInfo.kepalaNip) || '..............................................'}</div>
+    <div class="nama-ttd">${esc(ORG_SETTINGS.kepalaNama) || '..............................................'}</div>
+    <div>${esc(ORG_SETTINGS.kepalaPangkat) || ''}</div>
+    <div>NIP. ${esc(ORG_SETTINGS.kepalaNip) || '..............................................'}</div>
   </div>`;
-  return `<div class="dh-title">DAFTAR HADIR PNS, CPNS DAN PPPK</div><div class="dh-sub">${esc(biro).toUpperCase()} SETDA PROV. SULTRA</div>
+  return `<div class="dh-title">DAFTAR HADIR PNS, CPNS DAN PPPK</div><div class="dh-sub">${esc(ORG_SETTINGS.namaBiro).toUpperCase()} SETDA PROV. SULTRA</div>
     <div class="dh-meta-row"><span>HARI/TANGGAL : ${fmtTgl(tanggal)}</span><span>APEL : ${jenisApel === 'Apel Pagi' ? 'PAGI' : 'SORE'}</span></div>
     ${table}${catatan}${sign}`;
 }
 document.getElementById('btnCetakDaftarHadir').addEventListener('click', async () => {
   const mode = document.getElementById('rekapModeStaf').value;
-  const biro = document.getElementById('rekapBiroStaf').value;
   if (mode === 'harian') {
     const jenisApel = document.getElementById('rekapJenisApelStaf').value;
-    if (!biro) {
-      alert('Pilih Biro terlebih dahulu — formulir Daftar Hadir dicetak per-biro.');
-      return;
-    }
     if (!jenisApel) {
       alert('Pilih jenis Apel (Pagi/Sore) untuk mencetak Daftar Hadir.');
       return;
@@ -728,12 +846,11 @@ document.getElementById('btnCetakDaftarHadir').addEventListener('click', async (
     const tanggal = rekapTglSatuStaf.value;
     try {
       const raw = await StafDB.listKehadiranStaf({ dari: tanggal, sampai: tanggal, jenisApel });
-      const stafBiro = STAF.filter((p) => p.aktif && p.biro === biro);
-      const rows = stafBiro.map((p) => {
+      const rows = STAF.filter((p) => p.aktif).map((p) => {
         const k = raw.find((x) => x.stafId === p.id);
         return { staf: p, status: k ? k.status : null, tandaTangan: k ? k.tandaTangan : null };
       });
-      doPrint(buildDaftarHadirHtml({ tanggal, jenisApel, biro, rows }), false);
+      doPrint(buildDaftarHadirHtml({ tanggal, jenisApel, rows }), false);
     } catch (err) {
       toast('Gagal menyiapkan cetak: ' + err.message, 'error');
     }
@@ -747,43 +864,53 @@ document.getElementById('btnCetakDaftarHadir').addEventListener('click', async (
       if (!arr[r.stafId]) arr[r.stafId] = { staf: r.staf, ...Object.fromEntries(STATUS_LIST_STAF.map((s) => [s, 0])) };
       arr[r.stafId][r.status]++;
     });
-    const list = Object.values(arr).sort((a, b) => biroIndex(a.staf.biro) - biroIndex(b.staf.biro) || a.staf.nama.localeCompare(b.staf.nama));
+    const list = Object.values(arr).sort((a, b) => a.staf.nama.localeCompare(b.staf.nama));
     const head = STATUS_LIST_STAF.map((s) => `<th>${STATUS_LABEL_STAF[s]}</th>`).join('');
-    const body = list.map((r, i) => `<tr><td>${i + 1}</td><td>${esc(r.staf.biro)}</td><td>${esc(r.staf.nama)}</td>${STATUS_LIST_STAF.map((s) => `<td class="num">${r[s]}</td>`).join('')}</tr>`).join('');
-    const table = `<div class="print-table-wrap"><table class="print-table"><thead><tr><th class="num">No</th><th>Biro</th><th>Nama</th>${head}</tr></thead><tbody>${body}</tbody></table></div>`;
-    const sub = `Periode: ${lastRekapStaf.dari} s.d. ${lastRekapStaf.sampai}${lastRekapStaf.biro ? ' — ' + lastRekapStaf.biro : ''}`;
+    const body = list.map((r, i) => `<tr><td>${i + 1}</td><td>${esc(r.staf.nama)}</td>${STATUS_LIST_STAF.map((s) => `<td class="num">${r[s]}</td>`).join('')}</tr>`).join('');
+    const table = `<div class="print-table-wrap"><table class="print-table"><thead><tr><th class="num">No</th><th>Nama</th>${head}</tr></thead><tbody>${body}</tbody></table></div>`;
+    const sub = `Periode: ${lastRekapStaf.dari} s.d. ${lastRekapStaf.sampai}`;
     doPrint(letterheadGeneric('REKAPITULASI KEHADIRAN PEGAWAI', sub) + table, true);
   }
 });
 
-// ---------------- PENGATURAN: KEPALA BIRO ----------------
-function fillKepalaBiroForm() {
-  const sel = document.getElementById('kbBiro');
-  const setForm = () => {
-    const info = BIRO_FULL.find((b) => b.nama === sel.value) || {};
-    document.getElementById('kbNama').value = info.kepalaNama || '';
-    document.getElementById('kbPangkat').value = info.kepalaPangkat || '';
-    document.getElementById('kbNip').value = info.kepalaNip || '';
-  };
-  sel.onchange = setForm;
-  setForm();
+// ---------------- PENGATURAN (Admin) ----------------
+function fillPengaturanForm() {
+  document.getElementById('kbNama').value = ORG_SETTINGS.kepalaNama || '';
+  document.getElementById('kbPangkat').value = ORG_SETTINGS.kepalaPangkat || '';
+  document.getElementById('kbNip').value = ORG_SETTINGS.kepalaNip || '';
 }
 document.getElementById('btnSimpanKepalaBiro').addEventListener('click', async () => {
-  const biro = document.getElementById('kbBiro').value;
   const kepalaNama = document.getElementById('kbNama').value.trim();
   const kepalaPangkat = document.getElementById('kbPangkat').value.trim();
   const kepalaNip = document.getElementById('kbNip').value.trim();
   try {
-    await StafDB.updateKepalaBiro(biro, { kepalaNama, kepalaPangkat, kepalaNip });
-    const idx = BIRO_FULL.findIndex((b) => b.nama === biro);
-    if (idx >= 0) BIRO_FULL[idx] = { ...BIRO_FULL[idx], kepalaNama, kepalaPangkat, kepalaNip };
-    toast('Data Kepala Biro tersimpan.');
+    await StafDB.updateOrgSettings({ namaBiro: ORG_SETTINGS.namaBiro, kepalaNama, kepalaPangkat, kepalaNip });
+    ORG_SETTINGS = { ...ORG_SETTINGS, kepalaNama, kepalaPangkat, kepalaNip };
+    toast('Identitas Kepala Biro tersimpan.');
   } catch (err) {
     toast('Gagal menyimpan: ' + err.message, 'error');
   }
 });
-
-// ---------------- BACKUP ----------------
+document.getElementById('btnGantiPwAdmin').addEventListener('click', async () => {
+  const oldPw = document.getElementById('oldAdminPw').value;
+  const newPw = document.getElementById('newAdminPw').value;
+  if (!oldPw || !newPw || newPw.length < 4) {
+    alert('Isi password lama dan password baru (minimal 4 karakter).');
+    return;
+  }
+  try {
+    const ok = await StafDB.adminSetPassword(ADMIN_USERNAME, oldPw, newPw);
+    if (ok) {
+      toast('Password admin berhasil diganti.');
+      document.getElementById('oldAdminPw').value = '';
+      document.getElementById('newAdminPw').value = '';
+    } else {
+      toast('Password lama salah.', 'error');
+    }
+  } catch (err) {
+    toast('Gagal: ' + err.message, 'error');
+  }
+});
 document.getElementById('btnBackupStaf').addEventListener('click', async () => {
   try {
     const data = await StafDB.exportAllStaf();
@@ -798,17 +925,171 @@ document.getElementById('btnBackupStaf').addEventListener('click', async () => {
   }
 });
 
-// ---------------- REALTIME ----------------
+// ---------------- REALTIME (Admin) ----------------
 function setupRealtime() {
   if (!StafDB.isConfigured()) return;
   try {
     StafDB.subscribeChangesStaf(() => {
-      const activePage = document.querySelector('.nav-item.active')?.dataset.page;
+      const activePage = document.querySelector('#adminApp .nav-item.active')?.dataset.page;
       if (activePage === 'beranda') renderDashboardStaf();
     });
   } catch (err) {
     console.warn('Realtime tidak aktif:', err.message);
   }
+}
+
+// ---------------- BOOT ADMIN ----------------
+async function bootAdmin() {
+  showScreen('admin');
+  document.getElementById('todayLabel').textContent = fmtTgl(todayStr());
+  const ok = await checkConnection();
+  if (!ok) return;
+  try {
+    ORG_SETTINGS = await StafDB.getOrgSettings();
+    STAF = await StafDB.listStaf();
+    await renderDashboardStaf();
+    setupRealtime();
+  } catch (err) {
+    toast('Gagal memuat data awal: ' + err.message, 'error');
+  }
+}
+
+// =====================================================================
+// PEGAWAI APP
+// =====================================================================
+document.querySelectorAll('.pg-tab').forEach((tab) => {
+  tab.addEventListener('click', () => {
+    document.querySelectorAll('.pg-tab').forEach((t) => t.classList.remove('active'));
+    tab.classList.add('active');
+    document.querySelectorAll('.pg-panel').forEach((p) => p.classList.remove('active'));
+    document.getElementById('pg-' + tab.dataset.tab).classList.add('active');
+    if (tab.dataset.tab === 'qr') startRotatingQr();
+    else stopRotatingQr();
+  });
+});
+
+function fillProfilPegawai(staf) {
+  document.getElementById('pgNama').value = staf.nama;
+  document.getElementById('pgNip').value = staf.nip;
+  document.getElementById('pgGolongan').value = staf.golongan;
+  document.getElementById('pgKategori').value = staf.kategori;
+  document.getElementById('pgJabatan').value = staf.jabatan;
+  const box = document.getElementById('ttdPreviewBox');
+  if (staf.tandaTangan) {
+    document.getElementById('ttdPreviewImg').src = staf.tandaTangan;
+    box.style.display = 'block';
+  } else {
+    box.style.display = 'none';
+  }
+}
+document.getElementById('btnSimpanProfilPegawai').addEventListener('click', async () => {
+  const golongan = document.getElementById('pgGolongan').value.trim() || '-';
+  const kategori = document.getElementById('pgKategori').value;
+  const jabatan = document.getElementById('pgJabatan').value.trim();
+  if (!jabatan) {
+    alert('Jabatan wajib diisi.');
+    return;
+  }
+  try {
+    const updated = await StafDB.updateStafProfileSelf(PEGAWAI_SESSION.id, { golongan, kategori, jabatan });
+    PEGAWAI_SESSION = { ...PEGAWAI_SESSION, ...updated };
+    saveSession('pegawai', PEGAWAI_SESSION);
+    toast('Profil berhasil disimpan.');
+  } catch (err) {
+    toast('Gagal menyimpan: ' + err.message, 'error');
+  }
+});
+document.getElementById('btnGantiPinPegawai').addEventListener('click', async () => {
+  const pinLama = document.getElementById('pgPinLama').value.trim();
+  const pinBaru = document.getElementById('pgPinBaru').value.trim();
+  if (pinBaru.length < 4) {
+    alert('PIN baru minimal 4 digit.');
+    return;
+  }
+  try {
+    const ok = await StafDB.stafSetPin(PEGAWAI_SESSION.nip, pinLama, pinBaru);
+    if (ok) {
+      toast('PIN berhasil diganti.');
+      document.getElementById('pgPinLama').value = '';
+      document.getElementById('pgPinBaru').value = '';
+    } else {
+      toast('PIN lama salah.', 'error');
+    }
+  } catch (err) {
+    toast('Gagal: ' + err.message, 'error');
+  }
+});
+
+// --- Tanda tangan pegawai ---
+document.getElementById('btnClearSigPegawai').addEventListener('click', () => {
+  if (sigPadPegawai) sigPadPegawai.clear();
+  document.getElementById('sigPlaceholderPegawai').style.display = 'flex';
+});
+document.getElementById('btnSimpanTtd').addEventListener('click', async () => {
+  if (!sigPadPegawai || sigPadPegawai.isEmpty()) {
+    alert('Silakan tanda tangan terlebih dahulu.');
+    return;
+  }
+  const dataUrl = sigPadPegawai.toDataURL();
+  try {
+    const updated = await StafDB.saveStafSignature(PEGAWAI_SESSION.id, dataUrl);
+    PEGAWAI_SESSION = { ...PEGAWAI_SESSION, ...updated };
+    saveSession('pegawai', PEGAWAI_SESSION);
+    document.getElementById('ttdPreviewImg').src = dataUrl;
+    document.getElementById('ttdPreviewBox').style.display = 'block';
+    toast('Tanda tangan berhasil disimpan.');
+  } catch (err) {
+    toast('Gagal menyimpan: ' + err.message, 'error');
+  }
+});
+
+// --- QR Saya (rotating) ---
+async function drawRotatingQr() {
+  if (!PEGAWAI_SESSION) return;
+  const slot = currentTimeSlot();
+  const payload = await computeRotatingPayload(PEGAWAI_SESSION.id, PEGAWAI_SESSION.qrToken, slot);
+  const c = document.getElementById('rotatingQrCanvas');
+  if (window.QRCode && c) QRCode.toCanvas(c, payload, { width: 220, margin: 1, color: { dark: '#0F2A47', light: '#FFFFFF' } }, () => {});
+}
+function startRotatingQr() {
+  stopRotatingQr();
+  drawRotatingQr();
+  const circleLen = 100.5;
+  qrRotateInterval = setInterval(() => {
+    const msIntoSlot = Date.now() % 10000;
+    const remaining = Math.ceil((10000 - msIntoSlot) / 1000);
+    const label = document.getElementById('qrCountdownLabel');
+    if (label) label.textContent = remaining;
+    const circle = document.getElementById('qrTimerCircle');
+    if (circle) {
+      const frac = (10000 - msIntoSlot) / 10000;
+      circle.style.strokeDashoffset = (circleLen * (1 - frac)).toFixed(1);
+    }
+    if (msIntoSlot < 260) drawRotatingQr();
+  }, 250);
+}
+function stopRotatingQr() {
+  if (qrRotateInterval) clearInterval(qrRotateInterval);
+  qrRotateInterval = null;
+}
+
+async function bootPegawai(staf) {
+  PEGAWAI_SESSION = staf;
+  showScreen('pegawai');
+  fillProfilPegawai(staf);
+  document.querySelectorAll('.pg-tab').forEach((t) => t.classList.toggle('active', t.dataset.tab === 'profil'));
+  document.querySelectorAll('.pg-panel').forEach((p) => p.classList.toggle('active', p.id === 'pg-profil'));
+  setTimeout(() => {
+    sigPadPegawai = createSignaturePad(document.getElementById('sigCanvasPegawai'));
+    const ph = document.getElementById('sigPlaceholderPegawai');
+    document.getElementById('sigCanvasPegawai').addEventListener(
+      'pointerdown',
+      () => {
+        ph.style.display = 'none';
+      },
+      { once: true }
+    );
+  }, 50);
 }
 
 // ---------------- PWA SERVICE WORKER ----------------
@@ -819,30 +1100,28 @@ if ('serviceWorker' in navigator) {
 }
 
 // ---------------- INIT ----------------
-async function bootstrap() {
-  let ok = false;
-  try {
-    ok = await checkConnection();
-  } catch (err) {
-    console.error(err);
+async function init() {
+  updateOnlineStatus();
+  if (!StafDB.isConfigured()) {
+    document.getElementById('loginConfigBanner').style.display = 'block';
+    document.getElementById('loginConfigBanner').innerHTML = '⚠️ <b>Supabase belum dikonfigurasi.</b> Lengkapi <code>js/config.js</code> lalu muat ulang halaman.';
   }
-  if (!ok) {
-    document.getElementById('tabelStaf').innerHTML = '<tr><td colspan="8" class="muted">Menunggu konfigurasi Supabase...</td></tr>';
+  const session = loadSession();
+  if (session && session.role === 'admin' && session.data) {
+    ADMIN_USERNAME = session.data.username;
+    await bootAdmin();
     return;
   }
-  try {
-    BIRO_FULL = await StafDB.listBiroFull();
-    BIRO_LIST = BIRO_FULL.map((b) => b.nama);
-    STAF = await StafDB.listStaf();
-    fillBiroDropdowns();
-    await renderDashboardStaf();
-    setupRealtime();
-  } catch (err) {
-    toast('Gagal memuat data awal: ' + err.message, 'error');
-    document.getElementById('tabelStaf').innerHTML = '<tr><td colspan="8" class="muted">Gagal memuat data: ' + esc(err.message) + '</td></tr>';
+  if (session && session.role === 'pegawai' && session.data) {
+    try {
+      // Muat ulang profil terbaru dari server (jaga-jaga bila diubah admin)
+      const fresh = await StafDB.getStafById(session.data.id).catch(() => null);
+      await bootPegawai(fresh || session.data);
+      return;
+    } catch (err) {
+      console.warn(err);
+    }
   }
+  showScreen('login');
 }
-bootstrap().catch((err) => {
-  console.error('Bootstrap gagal total:', err);
-  toast('Aplikasi gagal memuat: ' + err.message, 'error');
-});
+init();

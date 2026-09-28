@@ -1,56 +1,97 @@
 -- =====================================================================
 -- SIAP APEL — Versi PEGAWAI — Skema Database Supabase (mandiri)
--- Aplikasi ini berdiri sendiri (tidak bergantung pada database/skema
--- aplikasi Versi Pejabat). Jalankan file ini di project Supabase-nya
--- sendiri (boleh project yang sama maupun project Supabase terpisah).
+-- Khusus untuk Biro Administrasi Pembangunan Setda Provinsi Sulawesi
+-- Tenggara. Jalankan file ini di SQL Editor project Supabase Anda.
 -- =====================================================================
--- Cara pakai: buka project Supabase Anda -> SQL Editor -> New query ->
--- tempel seluruh isi file ini -> Run.
+-- CATATAN KEAMANAN: login Admin & Pegawai pada skema ini adalah GERBANG
+-- LEVEL APLIKASI (PIN/password diverifikasi lewat fungsi database, bukan
+-- lewat Supabase Auth/JWT). Cocok untuk pemakaian internal di jaringan
+-- terbatas/terpercaya. Untuk keamanan tingkat lebih tinggi (mis. dapat
+-- diakses dari internet terbuka), pertimbangkan menambahkan Supabase
+-- Auth + Row Level Security berbasis auth.uid().
 -- =====================================================================
 
 create extension if not exists "pgcrypto";
 
 -- ---------------------------------------------------------------------
--- Tabel: biro
--- Daftar biro di lingkungan Sekretariat Daerah, termasuk identitas
--- Kepala Biro (dipakai untuk blok tanda tangan pada cetak Daftar Hadir).
+-- Pengaturan organisasi (satu baris tetap) — identitas biro & Kepala Biro
+-- dipakai untuk kop surat & blok tanda tangan pada cetak Daftar Hadir.
 -- ---------------------------------------------------------------------
-create table if not exists biro (
+create table if not exists org_settings (
+  id             int primary key default 1,
+  nama_biro      text not null default 'Biro Administrasi Pembangunan',
+  kepala_nama    text,
+  kepala_pangkat text,
+  kepala_nip     text,
+  constraint org_settings_singleton check (id = 1)
+);
+insert into org_settings (id, nama_biro, kepala_nama, kepala_pangkat, kepala_nip)
+values (1, 'Biro Administrasi Pembangunan', 'LM. Martosiswoyo, SE., M.Si', 'Pembina Utama Muda, IV/c', '19671010 199503 1 006')
+on conflict (id) do nothing;
+
+-- ---------------------------------------------------------------------
+-- Akun Admin (aplikasi, bukan Supabase Auth)
+-- ---------------------------------------------------------------------
+create table if not exists admin_users (
+  id            uuid primary key default gen_random_uuid(),
+  username      text not null unique,
+  password_hash text not null,
+  created_at    timestamptz not null default now()
+);
+-- Akun admin bawaan: username "admin", password "admin123"
+-- ***WAJIB DIGANTI*** lewat menu Pengaturan setelah login pertama kali.
+insert into admin_users (username, password_hash)
+values ('admin', crypt('admin123', gen_salt('bf')))
+on conflict (username) do nothing;
+
+-- ---------------------------------------------------------------------
+-- Tabel: staf (pegawai Biro Administrasi Pembangunan)
+-- qr_token dipakai sebagai kunci rahasia HMAC untuk kode QR yang
+-- berputar setiap 10 detik (lihat js/staf-app.js: computeRotatingCode).
+-- tanda_tangan: tanda tangan digital TERSIMPAN pada profil pegawai,
+-- otomatis disalin ke catatan kehadiran saat QR berhasil di-scan.
+-- ---------------------------------------------------------------------
+create table if not exists staf (
   id             uuid primary key default gen_random_uuid(),
-  nama           text not null unique,
-  urutan         integer not null default 0,
-  created_at     timestamptz not null default now()
+  nama           text not null,
+  nip            text not null unique,
+  golongan       text not null default '-',
+  kategori       text not null check (kategori in ('PNS','CPNS','PPPK')) default 'PNS',
+  jabatan        text not null,
+  qr_token       text not null unique default encode(gen_random_bytes(16), 'hex'),
+  pin_hash       text,                 -- null = akun pegawai belum diaktifkan
+  tanda_tangan   text,                 -- data URI PNG tanda tangan tersimpan
+  aktif          boolean not null default true,
+  created_at     timestamptz not null default now(),
+  updated_at     timestamptz not null default now()
 );
 
--- Kolom identitas Kepala Biro — ditambahkan dengan ALTER (bukan hanya di
--- CREATE TABLE) supaya tetap berjalan aman meskipun tabel "biro" ini
--- sudah ada sebelumnya (mis. dibuat oleh aplikasi Versi Pejabat pada
--- project Supabase yang sama).
-alter table biro add column if not exists kepala_nama text;
-alter table biro add column if not exists kepala_pangkat text;
-alter table biro add column if not exists kepala_nip text;
+create index if not exists idx_staf_aktif on staf (aktif);
+create index if not exists idx_staf_nama on staf (nama);
+create unique index if not exists idx_staf_qr_token on staf (qr_token);
+create unique index if not exists idx_staf_nip on staf (nip);
 
-insert into biro (nama, urutan) values
-  ('Biro Administrasi Pimpinan', 1),
-  ('Biro Umum', 2),
-  ('Biro Organisasi', 3),
-  ('Biro Pemerintahan', 4),
-  ('Biro Kesejahteraan Rakyat', 5),
-  ('Biro Hukum', 6),
-  ('Biro Perekonomian', 7),
-  ('Biro Administrasi Pembangunan', 8),
-  ('Biro Pengadaan Barang dan Jasa Pemerintah', 9)
-on conflict (nama) do nothing;
+-- Migrasi aman dari versi skema sebelumnya (yang punya kolom "biro" wajib
+-- diisi dan belum punya pin_hash/tanda_tangan) — aman dijalankan berkali-kali.
+alter table staf add column if not exists pin_hash text;
+alter table staf add column if not exists tanda_tangan text;
+do $$
+begin
+  if exists (select 1 from information_schema.columns where table_name = 'staf' and column_name = 'biro') then
+    execute 'alter table staf alter column biro drop not null';
+    execute 'alter table staf alter column biro set default ''Biro Administrasi Pembangunan''';
+  end if;
+end $$;
 
-update biro set
-  kepala_nama = 'LM. Martosiswoyo, SE., M.Si',
-  kepala_pangkat = 'Pembina Utama Muda, IV/c',
-  kepala_nip = '19671010 199503 1 006'
-where nama = 'Biro Administrasi Pembangunan' and kepala_nama is null;
+-- Kolom turunan aman-diakses klien: TRUE/FALSE saja, tanpa pernah
+-- mengekspos isi pin_hash (hash bcrypt) itu sendiri ke browser.
+do $$
+begin
+  if not exists (select 1 from information_schema.columns where table_name = 'staf' and column_name = 'punya_pin') then
+    alter table staf add column punya_pin boolean generated always as (pin_hash is not null) stored;
+  end if;
+end $$;
 
--- ---------------------------------------------------------------------
--- Fungsi bantu: auto-update kolom updated_at
--- ---------------------------------------------------------------------
 create or replace function set_updated_at()
 returns trigger as $$
 begin
@@ -59,29 +100,6 @@ begin
 end;
 $$ language plpgsql;
 
--- ---------------------------------------------------------------------
--- Tabel: staf
--- Pegawai umum: PNS, CPNS, dan PPPK.
--- ---------------------------------------------------------------------
-create table if not exists staf (
-  id             uuid primary key default gen_random_uuid(),
-  nama           text not null,
-  nip            text not null unique,
-  golongan       text not null default '-',
-  kategori       text not null check (kategori in ('PNS','CPNS','PPPK')) default 'PNS',
-  biro           text not null,
-  jabatan        text not null,
-  qr_token       text not null unique default encode(gen_random_bytes(12), 'hex'),
-  aktif          boolean not null default true,
-  created_at     timestamptz not null default now(),
-  updated_at     timestamptz not null default now()
-);
-
-create index if not exists idx_staf_biro on staf (biro);
-create index if not exists idx_staf_aktif on staf (aktif);
-create index if not exists idx_staf_nama on staf (nama);
-create unique index if not exists idx_staf_qr_token on staf (qr_token);
-
 drop trigger if exists trg_staf_updated_at on staf;
 create trigger trg_staf_updated_at
   before update on staf
@@ -89,8 +107,9 @@ create trigger trg_staf_updated_at
 
 -- ---------------------------------------------------------------------
 -- Tabel: kehadiran_staf
--- Status mengikuti legenda pada Daftar Hadir manual:
--- Hadir, Ijin, Sakit, Cuti, Tanpa Keterangan, Tugas Luar, Hadir P3K, Cuti P3K
+-- HADIR / HADIR_P3K hanya tercatat lewat scan QR (metode='QR') dengan
+-- tanda tangan otomatis tersalin dari profil. Status lain (tidak hadir)
+-- diinput manual oleh Admin beserta alasannya, tanpa tanda tangan.
 -- ---------------------------------------------------------------------
 create table if not exists kehadiran_staf (
   id            uuid primary key default gen_random_uuid(),
@@ -99,7 +118,7 @@ create table if not exists kehadiran_staf (
   staf_id       uuid not null references staf(id) on delete cascade,
   status        text not null check (status in ('HADIR','IZIN','SAKIT','CUTI','TK','TUGAS_LUAR','HADIR_P3K','CUTI_P3K')),
   keterangan    text default '',
-  tanda_tangan  text,                 -- data URI PNG tanda tangan digital (opsional)
+  tanda_tangan  text,
   metode        text not null default 'MANUAL' check (metode in ('MANUAL','QR')),
   waktu_input   timestamptz not null default now(),
   unique (tanggal, jenis_apel, staf_id)
@@ -111,17 +130,20 @@ create index if not exists idx_kehstaf_jenis on kehadiran_staf (jenis_apel);
 
 -- ---------------------------------------------------------------------
 -- Row Level Security
--- Dibuka untuk anon key (aplikasi internal tanpa login). Tambahkan
--- Supabase Auth bila akses perlu dibatasi lebih ketat.
+-- Tabel dibuka untuk anon key (akses sebenarnya diatur oleh gerbang
+-- login level aplikasi). password_hash & pin_hash TIDAK PERNAH dibaca
+-- langsung oleh klien — hanya diverifikasi lewat fungsi security definer
+-- di bawah, yang mengembalikan hasil boolean/record tanpa hash-nya.
 -- ---------------------------------------------------------------------
-alter table biro enable row level security;
+alter table org_settings enable row level security;
 alter table staf enable row level security;
 alter table kehadiran_staf enable row level security;
+alter table admin_users enable row level security;
 
-drop policy if exists "biro_select" on biro;
-create policy "biro_select" on biro for select using (true);
-drop policy if exists "biro_write" on biro;
-create policy "biro_write" on biro for all using (true) with check (true);
+drop policy if exists "org_select" on org_settings;
+create policy "org_select" on org_settings for select using (true);
+drop policy if exists "org_write" on org_settings;
+create policy "org_write" on org_settings for all using (true) with check (true);
 
 drop policy if exists "staf_select" on staf;
 create policy "staf_select" on staf for select using (true);
@@ -133,31 +155,146 @@ create policy "kehstaf_select" on kehadiran_staf for select using (true);
 drop policy if exists "kehstaf_write" on kehadiran_staf;
 create policy "kehstaf_write" on kehadiran_staf for all using (true) with check (true);
 
+-- admin_users: TIDAK ADA select/write policy untuk anon — tabel ini hanya
+-- bisa diakses lewat fungsi security definer di bawah (RLS default: tolak semua).
+
+-- ---------------------------------------------------------------------
+-- Fungsi login & aktivasi (security definer — dipanggil dengan anon key,
+-- tapi berjalan dengan hak akses pemilik fungsi sehingga bisa membaca
+-- password_hash/pin_hash secara aman tanpa mengeksposnya ke klien).
+-- ---------------------------------------------------------------------
+
+-- Login Admin
+create or replace function admin_login(p_username text, p_password text)
+returns table(ok boolean, username text)
+language plpgsql security definer as $$
+begin
+  if exists (
+    select 1 from admin_users
+    where username = p_username and password_hash = crypt(p_password, password_hash)
+  ) then
+    return query select true, p_username;
+  else
+    return query select false, null::text;
+  end if;
+end;
+$$;
+revoke all on function admin_login(text,text) from public;
+grant execute on function admin_login(text,text) to anon, authenticated;
+
+-- Ganti password Admin
+create or replace function admin_set_password(p_username text, p_old_password text, p_new_password text)
+returns boolean
+language plpgsql security definer as $$
+begin
+  if exists (
+    select 1 from admin_users
+    where username = p_username and password_hash = crypt(p_old_password, password_hash)
+  ) then
+    update admin_users set password_hash = crypt(p_new_password, gen_salt('bf')) where username = p_username;
+    return true;
+  end if;
+  return false;
+end;
+$$;
+revoke all on function admin_set_password(text,text,text) from public;
+grant execute on function admin_set_password(text,text,text) to anon, authenticated;
+
+-- Login Pegawai (NIP + PIN). Mengembalikan data profil (tanpa pin_hash).
+create or replace function staf_login(p_nip text, p_pin text)
+returns table(id uuid, nama text, nip text, golongan text, kategori text, jabatan text, aktif boolean, qr_token text, tanda_tangan text)
+language plpgsql security definer as $$
+begin
+  return query
+    select s.id, s.nama, s.nip, s.golongan, s.kategori, s.jabatan, s.aktif, s.qr_token, s.tanda_tangan
+    from staf s
+    where s.nip = p_nip and s.pin_hash is not null and s.pin_hash = crypt(p_pin, s.pin_hash);
+end;
+$$;
+revoke all on function staf_login(text,text) from public;
+grant execute on function staf_login(text,text) to anon, authenticated;
+
+-- Cek status NIP untuk layar aktivasi (tanpa membocorkan data pegawai lain)
+create or replace function staf_check_nip(p_nip text)
+returns table(found boolean, nama text, sudah_aktif boolean)
+language plpgsql security definer as $$
+begin
+  if exists (select 1 from staf where nip = p_nip) then
+    return query select true, s.nama, (s.pin_hash is not null) from staf s where s.nip = p_nip;
+  else
+    return query select false, null::text, false;
+  end if;
+end;
+$$;
+revoke all on function staf_check_nip(text) from public;
+grant execute on function staf_check_nip(text) to anon, authenticated;
+
+-- Aktivasi akun pegawai: set PIN pertama kali (hanya jika belum aktif)
+create or replace function staf_activate(p_nip text, p_pin text)
+returns boolean
+language plpgsql security definer as $$
+begin
+  update staf set pin_hash = crypt(p_pin, gen_salt('bf'))
+  where nip = p_nip and pin_hash is null;
+  return found;
+end;
+$$;
+revoke all on function staf_activate(text,text) from public;
+grant execute on function staf_activate(text,text) to anon, authenticated;
+
+-- Ganti PIN pegawai (perlu PIN lama)
+create or replace function staf_set_pin(p_nip text, p_pin_lama text, p_pin_baru text)
+returns boolean
+language plpgsql security definer as $$
+begin
+  if exists (select 1 from staf where nip = p_nip and pin_hash = crypt(p_pin_lama, pin_hash)) then
+    update staf set pin_hash = crypt(p_pin_baru, gen_salt('bf')) where nip = p_nip;
+    return true;
+  end if;
+  return false;
+end;
+$$;
+revoke all on function staf_set_pin(text,text,text) from public;
+grant execute on function staf_set_pin(text,text,text) to anon, authenticated;
+
+-- Admin: reset PIN pegawai (mis. pegawai lupa PIN) — mengosongkan pin_hash
+-- supaya pegawai bisa aktivasi ulang lewat layar "Aktivasi Akun".
+create or replace function admin_reset_pin(p_staf_id uuid)
+returns boolean
+language plpgsql security definer as $$
+begin
+  update staf set pin_hash = null where id = p_staf_id;
+  return found;
+end;
+$$;
+revoke all on function admin_reset_pin(uuid) from public;
+grant execute on function admin_reset_pin(uuid) to anon, authenticated;
+
 -- ---------------------------------------------------------------------
 -- Data awal: Staf (contoh — silakan sesuaikan/hapus lewat aplikasi)
 -- ---------------------------------------------------------------------
-insert into staf (nama, nip, golongan, kategori, biro, jabatan, aktif) values
-  ('LM. Martosiswoyo, SE., M.Si', '19671010 199503 1 006', 'IV/c', 'PNS', 'Biro Administrasi Pembangunan', 'Kepala Biro', true),
-  ('H. Yakob Udi, SE., M.Si', '19690517 199003 1 011', 'IV/c', 'PNS', 'Biro Administrasi Pembangunan', 'Perencana Ahli Madya', true),
-  ('Oni Iidrus, SP., M.Si', '19680908 199703 2 003', 'IV/c', 'PNS', 'Biro Administrasi Pembangunan', 'Analis Kebijakan Ahli Madya', true),
-  ('Wa Ode Juswati, SH, MM', '19731231 200804 2 001', 'IV/a', 'PNS', 'Biro Administrasi Pembangunan', 'Analis Kebijakan Ahli Madya', true),
-  ('Siti Saryani Samandi, SE., M.AP', '19780505 200901 2 001', 'III/d', 'PNS', 'Biro Administrasi Pembangunan', 'Analis Kebijakan Ahli Muda', true),
-  ('La Ode Arisan, S.IP.', '19791008 200604 1 008', 'III/d', 'PNS', 'Biro Administrasi Pembangunan', 'Penelaah Teknis Kebijakan', true),
-  ('Nurlina, SE.', '19800526 201001 2 003', 'III/d', 'PNS', 'Biro Administrasi Pembangunan', 'Penelaah Teknis Kebijakan', true),
-  ('Bahtiar, S.Sos', '19800301 201001 1 001', 'III/c', 'PNS', 'Biro Administrasi Pembangunan', 'Penelaah Teknis Kebijakan', true),
-  ('Nuryono, S.Pd', '19911223 202504 1 002', 'III/a', 'CPNS', 'Biro Administrasi Pembangunan', 'Perencana Ahli Pertama (CPNS)', true),
-  ('LD Muhammad Zulfikar S.Pd', '19920212 202504 1 002', 'III/a', 'CPNS', 'Biro Administrasi Pembangunan', 'Perencana Ahli Pertama (CPNS)', true),
-  ('Valintta Monika S.I.Kom', '19940702 202504 2 006', 'III/a', 'CPNS', 'Biro Administrasi Pembangunan', 'Analis Kebijakan Ahli Pertama (CPNS)', true),
-  ('Muhammad Aditya Maryadi S.I.Kom', '19961028 202504 1 003', 'III/a', 'CPNS', 'Biro Administrasi Pembangunan', 'Analis Kebijakan Ahli Pertama (CPNS)', true),
-  ('Alya Putri Balqis S.Kom', '19980815 202504 2 009', 'III/a', 'CPNS', 'Biro Administrasi Pembangunan', 'Analis Kebijakan Ahli Pertama (CPNS)', true),
-  ('Didik Rahmadi S.M', '19981129 202504 1 005', 'III/a', 'CPNS', 'Biro Administrasi Pembangunan', 'Analis Kebijakan Ahli Pertama (CPNS)', true),
-  ('Afry Anto S.I.Kom', '19980423 202504 1 005', 'III/a', 'CPNS', 'Biro Administrasi Pembangunan', 'Analis Kebijakan Ahli Pertama (CPNS)', true),
-  ('Muh. Irvhan Al Anshar Junait S.T', '19990319 202504 1 003', 'III/a', 'CPNS', 'Biro Administrasi Pembangunan', 'Analis Kebijakan Ahli Pertama (CPNS)', true),
-  ('Arif Asbullah S.M', '20000911 202504 1 008', 'III/a', 'CPNS', 'Biro Administrasi Pembangunan', 'Analis Kebijakan Ahli Pertama (CPNS)', true),
-  ('I Kadek Adi Kusuma Kencana S.M', '20010424 202504 1 006', 'III/a', 'CPNS', 'Biro Administrasi Pembangunan', 'Analis Kebijakan Ahli Pertama (CPNS)', true),
-  ('Nurul Fitri Artisyah, S.I.Kom', '19990408 202504 2 002', 'III/a', 'CPNS', 'Biro Administrasi Pembangunan', 'Analis Kebijakan Ahli Pertama (CPNS)', true),
-  ('Harmawanti Hasani, SE', '19990406 202504 1 006', 'III/a', 'CPNS', 'Biro Administrasi Pembangunan', 'Analis Kebijakan Ahli Pertama (CPNS)', true),
-  ('Hariyati, SE., MM', '19930509 202521 2 030', 'III/a', 'PPPK', 'Biro Administrasi Pembangunan', 'Penata Layanan Operasional (PPPK)', true),
-  ('Lia Selviana, SE', '19930504 202521 2 034', 'III/a', 'PPPK', 'Biro Administrasi Pembangunan', 'Penata Layanan Operasional (PPPK)', true),
-  ('Muh. Ikhwanullah, SKM', '19770906 202521 1 022', 'III/a', 'PPPK', 'Biro Administrasi Pembangunan', 'Penata Layanan Operasional (PPPK)', true)
+insert into staf (nama, nip, golongan, kategori, jabatan, aktif) values
+  ('LM. Martosiswoyo, SE., M.Si', '19671010 199503 1 006', 'IV/c', 'PNS', 'Kepala Biro', true),
+  ('H. Yakob Udi, SE., M.Si', '19690517 199003 1 011', 'IV/c', 'PNS', 'Perencana Ahli Madya', true),
+  ('Oni Iidrus, SP., M.Si', '19680908 199703 2 003', 'IV/c', 'PNS', 'Analis Kebijakan Ahli Madya', true),
+  ('Wa Ode Juswati, SH, MM', '19731231 200804 2 001', 'IV/a', 'PNS', 'Analis Kebijakan Ahli Madya', true),
+  ('Siti Saryani Samandi, SE., M.AP', '19780505 200901 2 001', 'III/d', 'PNS', 'Analis Kebijakan Ahli Muda', true),
+  ('La Ode Arisan, S.IP.', '19791008 200604 1 008', 'III/d', 'PNS', 'Penelaah Teknis Kebijakan', true),
+  ('Nurlina, SE.', '19800526 201001 2 003', 'III/d', 'PNS', 'Penelaah Teknis Kebijakan', true),
+  ('Bahtiar, S.Sos', '19800301 201001 1 001', 'III/c', 'PNS', 'Penelaah Teknis Kebijakan', true),
+  ('Nuryono, S.Pd', '19911223 202504 1 002', 'III/a', 'CPNS', 'Perencana Ahli Pertama (CPNS)', true),
+  ('LD Muhammad Zulfikar S.Pd', '19920212 202504 1 002', 'III/a', 'CPNS', 'Perencana Ahli Pertama (CPNS)', true),
+  ('Valintta Monika S.I.Kom', '19940702 202504 2 006', 'III/a', 'CPNS', 'Analis Kebijakan Ahli Pertama (CPNS)', true),
+  ('Muhammad Aditya Maryadi S.I.Kom', '19961028 202504 1 003', 'III/a', 'CPNS', 'Analis Kebijakan Ahli Pertama (CPNS)', true),
+  ('Alya Putri Balqis S.Kom', '19980815 202504 2 009', 'III/a', 'CPNS', 'Analis Kebijakan Ahli Pertama (CPNS)', true),
+  ('Didik Rahmadi S.M', '19981129 202504 1 005', 'III/a', 'CPNS', 'Analis Kebijakan Ahli Pertama (CPNS)', true),
+  ('Afry Anto S.I.Kom', '19980423 202504 1 005', 'III/a', 'CPNS', 'Analis Kebijakan Ahli Pertama (CPNS)', true),
+  ('Muh. Irvhan Al Anshar Junait S.T', '19990319 202504 1 003', 'III/a', 'CPNS', 'Analis Kebijakan Ahli Pertama (CPNS)', true),
+  ('Arif Asbullah S.M', '20000911 202504 1 008', 'III/a', 'CPNS', 'Analis Kebijakan Ahli Pertama (CPNS)', true),
+  ('I Kadek Adi Kusuma Kencana S.M', '20010424 202504 1 006', 'III/a', 'CPNS', 'Analis Kebijakan Ahli Pertama (CPNS)', true),
+  ('Nurul Fitri Artisyah, S.I.Kom', '19990408 202504 2 002', 'III/a', 'CPNS', 'Analis Kebijakan Ahli Pertama (CPNS)', true),
+  ('Harmawanti Hasani, SE', '19990406 202504 1 006', 'III/a', 'CPNS', 'Analis Kebijakan Ahli Pertama (CPNS)', true),
+  ('Hariyati, SE., MM', '19930509 202521 2 030', 'III/a', 'PPPK', 'Penata Layanan Operasional (PPPK)', true),
+  ('Lia Selviana, SE', '19930504 202521 2 034', 'III/a', 'PPPK', 'Penata Layanan Operasional (PPPK)', true),
+  ('Muh. Ikhwanullah, SKM', '19770906 202521 1 022', 'III/a', 'PPPK', 'Penata Layanan Operasional (PPPK)', true)
 on conflict (nip) do nothing;

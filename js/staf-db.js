@@ -1,6 +1,6 @@
 // =====================================================================
 // SIAP APEL — Lapisan Akses Data (Supabase) — Versi Pegawai
-// Memakai client bersama dari js/supabase-init.js (window.SB)
+// Memakai client dari js/supabase-init.js (window.SB)
 // =====================================================================
 
 const STATUS_LIST_STAF = ['HADIR', 'IZIN', 'SAKIT', 'CUTI', 'TK', 'TUGAS_LUAR', 'HADIR_P3K', 'CUTI_P3K'];
@@ -14,8 +14,10 @@ const STATUS_LABEL_STAF = {
   HADIR_P3K: 'Hadir P3K',
   CUTI_P3K: 'Cuti P3K',
 };
-// Status yang menandakan pegawai hadir secara fisik (perlu / boleh tanda tangan)
+// Status yang hanya boleh tercatat lewat scan QR (kehadiran fisik)
 const STATUS_HADIR_FISIK = ['HADIR', 'HADIR_P3K'];
+// Status "tidak hadir" yang bisa diinput manual oleh Admin beserta alasannya
+const STATUS_TIDAK_HADIR = STATUS_LIST_STAF.filter((s) => !STATUS_HADIR_FISIK.includes(s));
 
 const throwIfErrorStaf = window.throwIfError;
 function clientStaf() {
@@ -23,7 +25,7 @@ function clientStaf() {
 }
 
 function rowToStaf(r) {
-  return { id: r.id, nama: r.nama, nip: r.nip, golongan: r.golongan, kategori: r.kategori, biro: r.biro, jabatan: r.jabatan, qrToken: r.qr_token, aktif: r.aktif };
+  return { id: r.id, nama: r.nama, nip: r.nip, golongan: r.golongan, kategori: r.kategori, jabatan: r.jabatan, qrToken: r.qr_token, tandaTangan: r.tanda_tangan, aktif: r.aktif, punyaPin: r.punya_pin === true };
 }
 function rowToKehadiranStaf(r) {
   return { id: r.id, tanggal: r.tanggal, jenisApel: r.jenis_apel, stafId: r.staf_id, status: r.status, keterangan: r.keterangan, tandaTangan: r.tanda_tangan, metode: r.metode, waktuInput: r.waktu_input };
@@ -37,33 +39,75 @@ const StafDB = {
     return window.SB.configError();
   },
 
-  // ---------------- BIRO (dengan info Kepala Biro) ----------------
-  async listBiroFull() {
-    const { data, error } = await clientStaf().from('biro').select('*').order('urutan', { ascending: true });
+  // ---------------- AUTH ----------------
+  async adminLogin(username, password) {
+    const { data, error } = await clientStaf().rpc('admin_login', { p_username: username, p_password: password });
     throwIfErrorStaf(error);
-    return data.map((b) => ({ nama: b.nama, kepalaNama: b.kepala_nama || '', kepalaPangkat: b.kepala_pangkat || '', kepalaNip: b.kepala_nip || '' }));
+    return !!(data && data[0] && data[0].ok);
   },
-  async updateKepalaBiro(nama, { kepalaNama, kepalaPangkat, kepalaNip }) {
-    const { error } = await clientStaf().from('biro').update({ kepala_nama: kepalaNama, kepala_pangkat: kepalaPangkat, kepala_nip: kepalaNip }).eq('nama', nama);
+  async adminSetPassword(username, oldPassword, newPassword) {
+    const { data, error } = await clientStaf().rpc('admin_set_password', { p_username: username, p_old_password: oldPassword, p_new_password: newPassword });
+    throwIfErrorStaf(error);
+    return !!data;
+  },
+  async stafCheckNip(nip) {
+    const { data, error } = await clientStaf().rpc('staf_check_nip', { p_nip: nip });
+    throwIfErrorStaf(error);
+    const row = data && data[0];
+    return row ? { found: row.found, nama: row.nama, sudahAktif: row.sudah_aktif } : { found: false };
+  },
+  async stafActivate(nip, pin) {
+    const { data, error } = await clientStaf().rpc('staf_activate', { p_nip: nip, p_pin: pin });
+    throwIfErrorStaf(error);
+    return !!data;
+  },
+  async stafLogin(nip, pin) {
+    const { data, error } = await clientStaf().rpc('staf_login', { p_nip: nip, p_pin: pin });
+    throwIfErrorStaf(error);
+    const row = data && data[0];
+    return row ? rowToStaf(row) : null;
+  },
+  async stafSetPin(nip, pinLama, pinBaru) {
+    const { data, error } = await clientStaf().rpc('staf_set_pin', { p_nip: nip, p_pin_lama: pinLama, p_pin_baru: pinBaru });
+    throwIfErrorStaf(error);
+    return !!data;
+  },
+  async adminResetPin(stafId) {
+    const { data, error } = await clientStaf().rpc('admin_reset_pin', { p_staf_id: stafId });
+    throwIfErrorStaf(error);
+    return !!data;
+  },
+
+  // ---------------- ORG SETTINGS ----------------
+  async getOrgSettings() {
+    const { data, error } = await clientStaf().from('org_settings').select('*').eq('id', 1).maybeSingle();
+    throwIfErrorStaf(error);
+    return data ? { namaBiro: data.nama_biro, kepalaNama: data.kepala_nama || '', kepalaPangkat: data.kepala_pangkat || '', kepalaNip: data.kepala_nip || '' } : { namaBiro: 'Biro Administrasi Pembangunan', kepalaNama: '', kepalaPangkat: '', kepalaNip: '' };
+  },
+  async updateOrgSettings({ namaBiro, kepalaNama, kepalaPangkat, kepalaNip }) {
+    const { error } = await clientStaf().from('org_settings').update({ nama_biro: namaBiro, kepala_nama: kepalaNama, kepala_pangkat: kepalaPangkat, kepala_nip: kepalaNip }).eq('id', 1);
     throwIfErrorStaf(error);
   },
 
   // ---------------- STAF ----------------
+  // Catatan: kolom "pin_hash" SENGAJA tidak pernah di-select di sini,
+  // supaya hash PIN tidak pernah terkirim ke browser sama sekali. Status
+  // aktivasi akun dibaca lewat kolom turunan aman "punya_pin" (boolean).
   async listStaf() {
-    const { data, error } = await clientStaf().from('staf').select('*').order('nama', { ascending: true });
+    const { data, error } = await clientStaf().from('staf').select('id, nama, nip, golongan, kategori, jabatan, qr_token, tanda_tangan, aktif, punya_pin').order('nama', { ascending: true });
     throwIfErrorStaf(error);
     return data.map(rowToStaf);
   },
-  async getStafByToken(token) {
-    const { data, error } = await clientStaf().from('staf').select('*').eq('qr_token', token).maybeSingle();
+  async getStafById(id) {
+    const { data, error } = await clientStaf().from('staf').select('id, nama, nip, golongan, kategori, jabatan, qr_token, tanda_tangan, aktif, punya_pin').eq('id', id).maybeSingle();
     throwIfErrorStaf(error);
     return data ? rowToStaf(data) : null;
   },
   async insertStaf(s) {
     const { data, error } = await clientStaf()
       .from('staf')
-      .insert({ nama: s.nama, nip: s.nip, golongan: s.golongan, kategori: s.kategori, biro: s.biro, jabatan: s.jabatan, aktif: s.aktif })
-      .select()
+      .insert({ nama: s.nama, nip: s.nip, golongan: s.golongan, kategori: s.kategori, jabatan: s.jabatan, aktif: s.aktif })
+      .select('id, nama, nip, golongan, kategori, jabatan, qr_token, tanda_tangan, aktif, punya_pin')
       .single();
     throwIfErrorStaf(error);
     return rowToStaf(data);
@@ -71,16 +115,42 @@ const StafDB = {
   async updateStaf(id, s) {
     const { data, error } = await clientStaf()
       .from('staf')
-      .update({ nama: s.nama, nip: s.nip, golongan: s.golongan, kategori: s.kategori, biro: s.biro, jabatan: s.jabatan, aktif: s.aktif })
+      .update({ nama: s.nama, nip: s.nip, golongan: s.golongan, kategori: s.kategori, jabatan: s.jabatan, aktif: s.aktif })
       .eq('id', id)
-      .select()
+      .select('id, nama, nip, golongan, kategori, jabatan, qr_token, tanda_tangan, aktif, punya_pin')
+      .single();
+    throwIfErrorStaf(error);
+    return rowToStaf(data);
+  },
+  // Profil terbatas yang boleh diubah pegawai sendiri (tanpa nama/NIP/status aktif)
+  async updateStafProfileSelf(id, { golongan, kategori, jabatan }) {
+    const { data, error } = await clientStaf()
+      .from('staf')
+      .update({ golongan, kategori, jabatan })
+      .eq('id', id)
+      .select('id, nama, nip, golongan, kategori, jabatan, qr_token, tanda_tangan, aktif, punya_pin')
+      .single();
+    throwIfErrorStaf(error);
+    return rowToStaf(data);
+  },
+  async saveStafSignature(id, dataUrl) {
+    const { data, error } = await clientStaf()
+      .from('staf')
+      .update({ tanda_tangan: dataUrl })
+      .eq('id', id)
+      .select('id, nama, nip, golongan, kategori, jabatan, qr_token, tanda_tangan, aktif, punya_pin')
       .single();
     throwIfErrorStaf(error);
     return rowToStaf(data);
   },
   async regenerateQrToken(id) {
     const newToken = (crypto.randomUUID ? crypto.randomUUID() : String(Date.now()) + Math.random()).replace(/-/g, '');
-    const { data, error } = await clientStaf().from('staf').update({ qr_token: newToken }).eq('id', id).select().single();
+    const { data, error } = await clientStaf()
+      .from('staf')
+      .update({ qr_token: newToken })
+      .eq('id', id)
+      .select('id, nama, nip, golongan, kategori, jabatan, qr_token, tanda_tangan, aktif, punya_pin')
+      .single();
     throwIfErrorStaf(error);
     return rowToStaf(data);
   },
@@ -109,7 +179,6 @@ const StafDB = {
     throwIfErrorStaf(error);
     return data ? rowToKehadiranStaf(data) : null;
   },
-  // Simpan satu entri kehadiran (dipakai oleh alur scan QR & tanda-tangan individual)
   async upsertKehadiranSatu(entry) {
     const row = {
       tanggal: entry.tanggal,
@@ -124,27 +193,11 @@ const StafDB = {
     throwIfErrorStaf(error);
     return rowToKehadiranStaf(data);
   },
-  // Simpan banyak entri sekaligus (dipakai oleh Input Kehadiran manual massal)
-  async upsertKehadiranBatchStaf(tanggal, jenisApel, entries) {
-    const del = await clientStaf().from('kehadiran_staf').delete().eq('tanggal', tanggal).eq('jenis_apel', jenisApel);
-    throwIfErrorStaf(del.error);
-    const rows = entries.map((e) => ({
-      tanggal,
-      jenis_apel: jenisApel,
-      staf_id: e.stafId,
-      status: e.status,
-      keterangan: e.keterangan || '',
-      tanda_tangan: e.tandaTangan || null,
-      metode: e.metode || 'MANUAL',
-    }));
-    const { error } = await clientStaf().from('kehadiran_staf').insert(rows);
-    throwIfErrorStaf(error);
-  },
 
-  // ---------------- BACKUP / RESTORE ----------------
+  // ---------------- BACKUP ----------------
   async exportAllStaf() {
     const [staf, kehadiran] = await Promise.all([this.listStaf(), this.listKehadiranStaf()]);
-    return { staf, kehadiran, exportedAt: new Date().toISOString() };
+    return { staf: staf.map((s) => ({ ...s, tandaTangan: s.tandaTangan ? '[tersimpan]' : null })), kehadiran, exportedAt: new Date().toISOString() };
   },
 
   // ---------------- REALTIME ----------------
@@ -161,3 +214,4 @@ window.StafDB = StafDB;
 window.STATUS_LIST_STAF = STATUS_LIST_STAF;
 window.STATUS_LABEL_STAF = STATUS_LABEL_STAF;
 window.STATUS_HADIR_FISIK = STATUS_HADIR_FISIK;
+window.STATUS_TIDAK_HADIR = STATUS_TIDAK_HADIR;

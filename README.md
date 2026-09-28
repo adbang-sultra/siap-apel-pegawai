@@ -1,43 +1,42 @@
-# SIAP APEL — Versi Pegawai
+# SIAP APEL — Versi Pegawai (Biro Administrasi Pembangunan)
 
-Aplikasi absensi Apel Pagi/Sore untuk pegawai PNS, CPNS, dan PPPK — Sekretariat Daerah Provinsi Sulawesi Tenggara. Dilengkapi tanda tangan digital, absen via scan QR, dan siap dipasang sebagai aplikasi mobile (PWA).
+Aplikasi absensi Apel Pagi/Sore khusus pegawai **Biro Administrasi Pembangunan**, Sekretariat Daerah Provinsi Sulawesi Tenggara. Dua level akses (Admin & Pegawai), absen lewat kode QR yang **berputar setiap 10 detik**, tanda tangan digital tersimpan di profil pegawai, dan siap dipasang sebagai aplikasi mobile (PWA).
 
-Situs statis (HTML/CSS/JS, tanpa proses build) yang terhubung langsung ke **Supabase**, siap di-deploy ke **Vercel**. Aplikasi ini berdiri sendiri — tidak bergantung pada aplikasi/proyek lain.
+Situs statis (HTML/CSS/JS, tanpa proses build) yang terhubung langsung ke **Supabase**, siap di-deploy ke **Vercel**. Berdiri sendiri — tidak bergantung pada aplikasi/proyek lain.
 
 ## Struktur folder
 
 ```
 siap-apel-pegawai/
-├─ index.html             Halaman utama aplikasi
-├─ manifest.webmanifest    Manifest PWA (agar bisa di-install ke HP)
+├─ index.html             Halaman utama (login + panel Admin + panel Pegawai)
+├─ manifest.webmanifest    Manifest PWA
 ├─ sw.js                   Service worker (app-shell caching)
 ├─ css/
 │  ├─ styles.css            Styling inti
-│  └─ staf.css              Komponen khusus: scanner, tanda tangan, kartu QR, cetak Daftar Hadir
+│  └─ staf.css              Login, panel Admin/Pegawai, QR berputar, cetak Daftar Hadir
 ├─ js/
 │  ├─ config.js              Kredensial koneksi Supabase (WAJIB diisi)
 │  ├─ supabase-init.js       Inisialisasi client Supabase
-│  ├─ staf-db.js              Lapisan akses data
+│  ├─ staf-db.js              Lapisan akses data + fungsi login
 │  ├─ signature-pad.js         Komponen tanda tangan digital (canvas)
-│  └─ staf-app.js              Logika UI aplikasi
+│  └─ staf-app.js              Logika UI, QR berputar (HMAC), scan kontinu
 ├─ assets/                  Logo & ikon aplikasi
-├─ supabase/schema.sql      Skrip SQL pembuatan tabel + data awal
+├─ supabase/schema.sql      Tabel, RLS, dan fungsi login (security definer)
 ├─ vercel.json              Konfigurasi deploy Vercel
 └─ README.md
 ```
 
 ## 1. Menyiapkan database Supabase
 
-1. Buat akun/project baru di [supabase.com](https://supabase.com) (boleh project yang sama dengan aplikasi lain, boleh juga terpisah — aplikasi ini tidak bergantung pada skema apa pun selain miliknya sendiri).
-2. Masuk ke project Anda → **SQL Editor** → **New query**.
-3. Salin seluruh isi file `supabase/schema.sql`, tempel, lalu **Run**.
-   - Membuat tabel `biro` (termasuk identitas Kepala Biro untuk cetak), `staf`, `kehadiran_staf` (dengan kolom tanda tangan digital & kode QR unik per pegawai), RLS, dan data contoh.
-4. Buka **Project Settings → API**. Catat **Project URL** dan **anon / public key**.
+1. Buat/pakai project di [supabase.com](https://supabase.com).
+2. **SQL Editor → New query** → salin seluruh isi `supabase/schema.sql` → **Run**.
+   - Membuat tabel `org_settings`, `admin_users`, `staf`, `kehadiran_staf`, RLS, fungsi login, dan data contoh.
+   - **Aman dijalankan ulang / di project yang sudah pernah dipakai versi sebelumnya** — skrip ini memakai `IF NOT EXISTS` dan migrasi otomatis untuk kolom baru.
+3. **Project Settings → API** → catat **Project URL** dan **anon / public key**.
 
 ## 2. Menghubungkan aplikasi ke Supabase
 
-Buka `js/config.js` dan isi:
-
+Isi `js/config.js`:
 ```js
 window.SIAP_APEL_CONFIG = {
   SUPABASE_URL: 'https://xxxxxxxx.supabase.co',
@@ -45,14 +44,7 @@ window.SIAP_APEL_CONFIG = {
 };
 ```
 
-## 3. Menjalankan secara lokal (opsional)
-
-```bash
-npx serve .
-```
-Buka `http://localhost:3000`. Catatan: fitur **scan kamera QR** butuh konteks aman (`https://` atau `localhost`) — pada `localhost` biasanya sudah otomatis diizinkan browser.
-
-## 4. Deploy ke Vercel
+## 3. Deploy ke Vercel
 
 ```bash
 npm install -g vercel
@@ -60,26 +52,45 @@ cd siap-apel-pegawai
 vercel
 vercel --prod
 ```
-Atau import folder ini sebagai project baru lewat dashboard Vercel (preset **Other**, tanpa build command). Vercel otomatis menyediakan HTTPS, yang diperlukan agar fitur kamera/scan QR berfungsi.
+Atau import folder ini sebagai project baru lewat dashboard Vercel (preset **Other**, tanpa build command). Vercel otomatis menyediakan **HTTPS**, wajib untuk fitur kamera (scan QR).
 
-## 5. Menyiapkan data setelah deploy
+## 4. Login pertama kali
 
-1. Buka **Data Pegawai** → tambahkan/sesuaikan daftar pegawai (nama, NIP, golongan, kategori PNS/CPNS/PPPK, biro, jabatan).
-2. Kode QR tiap pegawai otomatis dibuat oleh database. Cetak lewat **Kartu QR Pegawai → Cetak Semua Kartu**, lalu bagikan/laminating ke masing-masing pegawai.
-3. Isi identitas Kepala Biro di **Pengaturan → Identitas Kepala Biro** (nama, pangkat/golongan, NIP) agar blok tanda tangan pada cetak Daftar Hadir terisi otomatis.
+**Admin** — akun bawaan:
+- Username: `admin`
+- Password: `admin123`
 
-## 6. Fitur utama
+⚠️ **Segera ganti password ini** lewat menu *Pengaturan → Ganti Password Admin* setelah login pertama kali.
 
-- **Tanda tangan digital** — pegawai menandatangani kehadirannya langsung di layar (canvas, mendukung jari/mouse) saat status Hadir / Hadir P3K.
-- **Absen via QR Code** — tiap pegawai punya kartu QR unik. Saat apel, buka **Absen Kehadiran → Scan Kartu QR**, kamera mengenali pegawai secara otomatis, tinggal pilih status & tanda tangan.
-- **Absen manual** tetap tersedia (cari nama dari daftar) sebagai alternatif bila kamera tidak dipakai.
-- **Aplikasi mobile (PWA)** — bisa "Add to Home Screen" di HP (Android/iOS) dan terbuka seperti aplikasi native, lengkap dengan ikon.
-- **Cetak Daftar Hadir** mengikuti format formulir fisik "DAFTAR HADIR PNS, CPNS DAN PPPK" per-biro: kop surat, baris Hari/Tanggal & Apel, tabel No/Nama+NIP/Gol/Jabatan/Tanda Tangan (menampilkan tanda tangan digital jika sudah absen, atau titik-titik kosong jika belum), rekap jumlah per status, dan blok tanda tangan Kepala Biro.
-- **Rekap rentang tanggal** + cetak rekap ringkas.
-- Perubahan data dari perangkat lain otomatis memperbarui Dashboard (Supabase Realtime).
+**Pegawai** — setiap pegawai yang sudah didaftarkan Admin di *Data Pegawai* perlu **mengaktifkan akun** sendiri sekali saja:
+1. Buka tab **Pegawai** di halaman login → **"Belum punya PIN? Aktivasi akun pertama kali"**.
+2. Masukkan NIP → sistem mengenali nama pegawai (harus sudah didaftarkan Admin lebih dulu) → buat PIN (angka, minimal 4 digit).
+3. Setelah aktif, pegawai login dengan NIP + PIN tersebut kapan pun.
 
-## 7. Keamanan & catatan
+## 5. Alur pemakaian
 
-- RLS pada `schema.sql` mengizinkan baca & tulis oleh siapa pun yang memegang anon key — cocok untuk aplikasi internal tanpa login. Untuk akses lebih luas, tambahkan Supabase Auth dan sesuaikan kebijakan RLS.
-- Menghapus data pegawai akan ikut menghapus seluruh riwayat kehadiran & tanda tangannya (`ON DELETE CASCADE`). Gunakan tombol **Nonaktifkan** bila hanya ingin menghentikan pencatatan tanpa kehilangan riwayat.
-- Kode QR (`qr_token`) bisa dibuat ulang kapan saja dari menu Kartu QR / Data Pegawai bila kartu hilang atau ingin dinonaktifkan — kartu lama otomatis tidak berlaku lagi setelah token diganti.
+**Pegawai** (login sendiri, di HP masing-masing):
+1. Tab **Profil** — lengkapi/perbarui golongan, kategori, jabatan; ganti PIN bila perlu.
+2. Tab **Tanda Tangan** — tanda tangan sekali dan simpan. Tanda tangan ini otomatis dipakai setiap hari saat QR di-scan — **tidak perlu tanda tangan ulang setiap apel**.
+3. Tab **QR Saya** — tunjukkan QR yang tampil di layar ke kamera Admin saat apel. QR ini **berganti otomatis setiap 10 detik** (ada lingkaran hitung mundur), sehingga screenshot/foto QR tidak bisa dipakai untuk titip absen di lain waktu.
+
+**Admin** (mengoperasikan apel, biasanya di tablet/laptop/HP di lokasi apel):
+1. Menu **Absen (Scan QR)** → pilih tanggal & jenis Apel → **Mulai Scan QR**.
+2. Kamera tetap menyala dan otomatis mencatat **Hadir** setiap kali berhasil membaca QR pegawai (dengan tanda tangan tersimpan pegawai ikut tersalin), lalu siap memindai pegawai berikutnya tanpa perlu dibuka ulang.
+3. Untuk pegawai yang tidak hadir (izin/sakit/cuti/tugas luar/dsb.), gunakan tombol **Tandai Tidak Hadir** → cari nama → pilih alasan → Simpan.
+4. Menu **Data Pegawai** — tambah/edit pegawai, lihat status aktivasi akun & status tanda tangan, reset PIN bila pegawai lupa.
+5. Menu **Rekap & Cetak** — rekap harian (format Daftar Hadir resmi, siap cetak/PDF) atau rentang tanggal.
+
+## 6. Tentang kode QR yang berputar
+
+Kode QR dibuat dari kombinasi `id pegawai + slot waktu (10 detik) + tanda HMAC-SHA256`, dihitung langsung di browser pegawai (Web Crypto API) dan diverifikasi di browser Admin saat scan — cocok untuk mencegah kecurangan sederhana seperti memfoto/screenshot QR untuk dipakai orang lain atau di waktu lain, karena kode kedaluwarsa dalam hitungan detik.
+
+**Batasan yang perlu diketahui:** karena aplikasi ini murni statis (tanpa server backend selain Supabase), kunci rahasia di balik kode QR (`qr_token`) tersimpan di tabel `staf` yang bisa diakses lewat anon key. Ini cukup untuk mencegah kecurangan kasual (foto/screenshot QR), tapi bukan pengamanan kriptografis tingkat tinggi terhadap pihak yang punya akses teknis ke anon key. Untuk kebutuhan keamanan lebih tinggi, pertimbangkan menambahkan Supabase Auth + Edge Function untuk menyimpan rahasia di sisi server sepenuhnya.
+
+## 7. Keamanan & catatan penting
+
+- **Login Admin & Pegawai adalah gerbang level aplikasi**, diverifikasi lewat fungsi database (`security definer`) yang membandingkan hash bcrypt tanpa pernah mengirim hash tersebut ke browser. Ini cocok untuk pemakaian internal satu biro. Untuk akses dari jaringan terbuka/publik, pertimbangkan menambah Supabase Auth.
+- Menghapus data pegawai akan ikut menghapus seluruh riwayat kehadirannya (`ON DELETE CASCADE`). Gunakan **Nonaktifkan** bila hanya ingin menghentikan pencatatan tanpa kehilangan riwayat.
+- Admin dapat **reset PIN** pegawai (mis. lupa PIN) dari menu Data Pegawai — pegawai kemudian aktivasi ulang dengan PIN baru.
+- Kode QR (`qr_token`) adalah rahasia per pegawai; tidak perlu dan tidak bisa dicetak sebagai kartu statis karena kodenya selalu berubah — cukup ditampilkan lewat sesi login pegawai sendiri.
+- Fitur kamera (scan QR) **memerlukan HTTPS** — otomatis tersedia di Vercel, tapi tidak akan berfungsi bila diakses lewat `http://` biasa (kecuali `localhost`).
