@@ -73,6 +73,11 @@ function createSignaturePad(canvas) {
     destroy() {
       window.removeEventListener('resize', resize);
       window.removeEventListener('mouseup', end);
+      canvas.removeEventListener('mousedown', start);
+      canvas.removeEventListener('mousemove', move);
+      canvas.removeEventListener('touchstart', start);
+      canvas.removeEventListener('touchmove', move);
+      canvas.removeEventListener('touchend', end);
     },
   };
 }

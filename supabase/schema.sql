@@ -170,8 +170,8 @@ returns table(ok boolean, username text)
 language plpgsql security definer as $$
 begin
   if exists (
-    select 1 from admin_users
-    where username = p_username and password_hash = crypt(p_password, password_hash)
+    select 1 from admin_users au
+    where au.username = p_username and au.password_hash = crypt(p_password, au.password_hash)
   ) then
     return query select true, p_username;
   else

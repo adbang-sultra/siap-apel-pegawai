@@ -7,7 +7,6 @@ let STAF = [];
 let ORG_SETTINGS = { namaBiro: 'Biro Administrasi Pembangunan', kepalaNama: '', kepalaPangkat: '', kepalaNip: '' };
 let PEGAWAI_SESSION = null; // profil pegawai yang sedang login (role pegawai)
 let ADMIN_USERNAME = null;
-let sigPad = null;
 let sigPadPegawai = null;
 let html5QrCode = null;
 let qrRotateInterval = null;
@@ -965,8 +964,28 @@ document.querySelectorAll('.pg-tab').forEach((tab) => {
     document.getElementById('pg-' + tab.dataset.tab).classList.add('active');
     if (tab.dataset.tab === 'qr') startRotatingQr();
     else stopRotatingQr();
+    if (tab.dataset.tab === 'ttd') initSignaturePadPegawai();
   });
 });
+
+// Tanda tangan HARUS dibuat/di-resize setelah panelnya benar-benar terlihat
+// (display:block), karena ukuran canvas dihitung dari ukuran nyata di layar.
+// Membuatnya saat panel masih tersembunyi menghasilkan canvas berukuran 0x0
+// sehingga coretan tidak pernah muncul.
+function initSignaturePadPegawai() {
+  const canvas = document.getElementById('sigCanvasPegawai');
+  if (sigPadPegawai) sigPadPegawai.destroy();
+  sigPadPegawai = createSignaturePad(canvas);
+  const ph = document.getElementById('sigPlaceholderPegawai');
+  ph.style.display = 'flex';
+  canvas.addEventListener(
+    'pointerdown',
+    () => {
+      ph.style.display = 'none';
+    },
+    { once: true }
+  );
+}
 
 function fillProfilPegawai(staf) {
   document.getElementById('pgNama').value = staf.nama;
@@ -1046,10 +1065,15 @@ document.getElementById('btnSimpanTtd').addEventListener('click', async () => {
 // --- QR Saya (rotating) ---
 async function drawRotatingQr() {
   if (!PEGAWAI_SESSION) return;
+  const c = document.getElementById('rotatingQrCanvas');
+  if (!window.QRCode) {
+    const label = document.getElementById('qrCountdownLabel');
+    if (label) label.textContent = 'Pustaka QR gagal dimuat — periksa koneksi internet lalu muat ulang halaman.';
+    return;
+  }
   const slot = currentTimeSlot();
   const payload = await computeRotatingPayload(PEGAWAI_SESSION.id, PEGAWAI_SESSION.qrToken, slot);
-  const c = document.getElementById('rotatingQrCanvas');
-  if (window.QRCode && c) QRCode.toCanvas(c, payload, { width: 220, margin: 1, color: { dark: '#0F2A47', light: '#FFFFFF' } }, () => {});
+  QRCode.toCanvas(c, payload, { width: 220, margin: 1, color: { dark: '#0F2A47', light: '#FFFFFF' } }, () => {});
 }
 function startRotatingQr() {
   stopRotatingQr();
@@ -1079,17 +1103,9 @@ async function bootPegawai(staf) {
   fillProfilPegawai(staf);
   document.querySelectorAll('.pg-tab').forEach((t) => t.classList.toggle('active', t.dataset.tab === 'profil'));
   document.querySelectorAll('.pg-panel').forEach((p) => p.classList.toggle('active', p.id === 'pg-profil'));
-  setTimeout(() => {
-    sigPadPegawai = createSignaturePad(document.getElementById('sigCanvasPegawai'));
-    const ph = document.getElementById('sigPlaceholderPegawai');
-    document.getElementById('sigCanvasPegawai').addEventListener(
-      'pointerdown',
-      () => {
-        ph.style.display = 'none';
-      },
-      { once: true }
-    );
-  }, 50);
+  // Signature pad sengaja TIDAK dibuat di sini — baru dibuat saat tab
+  // "Tanda Tangan" benar-benar dibuka (lihat initSignaturePadPegawai),
+  // supaya ukuran canvas terhitung dengan benar.
 }
 
 // ---------------- PWA SERVICE WORKER ----------------
