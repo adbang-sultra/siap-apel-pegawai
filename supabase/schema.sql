@@ -58,6 +58,7 @@ create table if not exists staf (
   golongan       text not null default '-',
   kategori       text not null check (kategori in ('PNS','CPNS','PPPK')) default 'PNS',
   jabatan        text not null,
+  urutan         integer not null default 9999,   -- nomor urut sesuai Daftar Hadir
   qr_token       text not null unique default encode(gen_random_bytes(16), 'hex'),
   pin_hash       text,                 -- null = akun pegawai belum diaktifkan
   tanda_tangan   text,                 -- data URI PNG tanda tangan tersimpan
@@ -75,6 +76,7 @@ create unique index if not exists idx_staf_nip on staf (nip);
 -- diisi dan belum punya pin_hash/tanda_tangan) — aman dijalankan berkali-kali.
 alter table staf add column if not exists pin_hash text;
 alter table staf add column if not exists tanda_tangan text;
+alter table staf add column if not exists urutan integer not null default 9999;
 do $$
 begin
   if exists (select 1 from information_schema.columns where table_name = 'staf' and column_name = 'biro') then
@@ -270,31 +272,72 @@ $$;
 revoke all on function admin_reset_pin(uuid) from public;
 grant execute on function admin_reset_pin(uuid) to anon, authenticated;
 
+-- Waktu server (milidetik epoch). Dipakai kedua sisi (HP pegawai & perangkat
+-- Admin) untuk menyamakan jam, sehingga kode QR berputar tetap valid walaupun
+-- jam HP dan jam komputer berbeda.
+create or replace function server_time_ms()
+returns bigint
+language sql stable as $$
+  select (extract(epoch from clock_timestamp()) * 1000)::bigint;
+$$;
+revoke all on function server_time_ms() from public;
+grant execute on function server_time_ms() to anon, authenticated;
+
 -- ---------------------------------------------------------------------
--- Data awal: Staf (contoh — silakan sesuaikan/hapus lewat aplikasi)
+-- Data awal: 52 pegawai Biro Administrasi Pembangunan
+-- (sesuai Daftar Hadir; kolom "urutan" menjaga urutan seperti di formulir)
 -- ---------------------------------------------------------------------
-insert into staf (nama, nip, golongan, kategori, jabatan, aktif) values
-  ('LM. Martosiswoyo, SE., M.Si', '19671010 199503 1 006', 'IV/c', 'PNS', 'Kepala Biro', true),
-  ('H. Yakob Udi, SE., M.Si', '19690517 199003 1 011', 'IV/c', 'PNS', 'Perencana Ahli Madya', true),
-  ('Oni Iidrus, SP., M.Si', '19680908 199703 2 003', 'IV/c', 'PNS', 'Analis Kebijakan Ahli Madya', true),
-  ('Wa Ode Juswati, SH, MM', '19731231 200804 2 001', 'IV/a', 'PNS', 'Analis Kebijakan Ahli Madya', true),
-  ('Siti Saryani Samandi, SE., M.AP', '19780505 200901 2 001', 'III/d', 'PNS', 'Analis Kebijakan Ahli Muda', true),
-  ('La Ode Arisan, S.IP.', '19791008 200604 1 008', 'III/d', 'PNS', 'Penelaah Teknis Kebijakan', true),
-  ('Nurlina, SE.', '19800526 201001 2 003', 'III/d', 'PNS', 'Penelaah Teknis Kebijakan', true),
-  ('Bahtiar, S.Sos', '19800301 201001 1 001', 'III/c', 'PNS', 'Penelaah Teknis Kebijakan', true),
-  ('Nuryono, S.Pd', '19911223 202504 1 002', 'III/a', 'CPNS', 'Perencana Ahli Pertama (CPNS)', true),
-  ('LD Muhammad Zulfikar S.Pd', '19920212 202504 1 002', 'III/a', 'CPNS', 'Perencana Ahli Pertama (CPNS)', true),
-  ('Valintta Monika S.I.Kom', '19940702 202504 2 006', 'III/a', 'CPNS', 'Analis Kebijakan Ahli Pertama (CPNS)', true),
-  ('Muhammad Aditya Maryadi S.I.Kom', '19961028 202504 1 003', 'III/a', 'CPNS', 'Analis Kebijakan Ahli Pertama (CPNS)', true),
-  ('Alya Putri Balqis S.Kom', '19980815 202504 2 009', 'III/a', 'CPNS', 'Analis Kebijakan Ahli Pertama (CPNS)', true),
-  ('Didik Rahmadi S.M', '19981129 202504 1 005', 'III/a', 'CPNS', 'Analis Kebijakan Ahli Pertama (CPNS)', true),
-  ('Afry Anto S.I.Kom', '19980423 202504 1 005', 'III/a', 'CPNS', 'Analis Kebijakan Ahli Pertama (CPNS)', true),
-  ('Muh. Irvhan Al Anshar Junait S.T', '19990319 202504 1 003', 'III/a', 'CPNS', 'Analis Kebijakan Ahli Pertama (CPNS)', true),
-  ('Arif Asbullah S.M', '20000911 202504 1 008', 'III/a', 'CPNS', 'Analis Kebijakan Ahli Pertama (CPNS)', true),
-  ('I Kadek Adi Kusuma Kencana S.M', '20010424 202504 1 006', 'III/a', 'CPNS', 'Analis Kebijakan Ahli Pertama (CPNS)', true),
-  ('Nurul Fitri Artisyah, S.I.Kom', '19990408 202504 2 002', 'III/a', 'CPNS', 'Analis Kebijakan Ahli Pertama (CPNS)', true),
-  ('Harmawanti Hasani, SE', '19990406 202504 1 006', 'III/a', 'CPNS', 'Analis Kebijakan Ahli Pertama (CPNS)', true),
-  ('Hariyati, SE., MM', '19930509 202521 2 030', 'III/a', 'PPPK', 'Penata Layanan Operasional (PPPK)', true),
-  ('Lia Selviana, SE', '19930504 202521 2 034', 'III/a', 'PPPK', 'Penata Layanan Operasional (PPPK)', true),
-  ('Muh. Ikhwanullah, SKM', '19770906 202521 1 022', 'III/a', 'PPPK', 'Penata Layanan Operasional (PPPK)', true)
+insert into staf (urutan, nama, nip, golongan, kategori, jabatan, aktif) values
+  (1, 'LM. MARTOSISWOYO, SE., M.Si', '19671010 199503 1 006', 'IV/c', 'PNS', 'KEPALA BIRO', true),
+  (2, 'H. YAKOB UDI, SE., M.Si', '19690517 199003 1 011', 'IV/c', 'PNS', 'Perencana Ahli Madya', true),
+  (3, 'ONI IDRUS, SP., M.Si', '19680908 199703 2 003', 'IV/c', 'PNS', 'Analis Kebijakan Ahli Madya', true),
+  (4, 'Dr. NURBIYAH, S.STP, M.Si', '19841002 200212 2 002', 'IV/b', 'PNS', 'Analis Kebijakan Ahli Madya', true),
+  (5, 'WA ODE JUSWATI, SH, M.M', '19731231 200804 2 001', 'IV/a', 'PNS', 'Analis Kebijakan Ahli Madya', true),
+  (6, 'MURNIATI, S.IP, M.AP', '19750415 201101 2 002', 'III/d', 'PNS', 'Kasubag Tata Usaha', true),
+  (7, 'HENDRIK KRESNAWAN, S.IP, M.M', '19880523 200701 1 004', 'III/d', 'PNS', 'Perencana Ahli Madya', true),
+  (8, 'SITI SARYANI SAMANDI, SE., M.AP', '19780505 200901 2 001', 'III/d', 'PNS', 'Analis Kebijakan Ahli Muda', true),
+  (9, 'ALIF ALFIAN. R, S.STP', '19900620 201010 1 001', 'III/d', 'PNS', 'Analis Kebijakan Ahli Muda', true),
+  (10, 'RIAN PUTRA SANJAYA, S.STP., MM', '19910701 201406 1 001', 'III/d', 'PNS', 'Analis Kebijakan Ahli Muda', true),
+  (11, 'ASMAWATI SYAMSUDDIN RAGA, SP', '19710604 200604 2 022', 'III/d', 'PNS', 'Penelaah Teknis Kebijakan', true),
+  (12, 'LA ODE ARISAN, S.IP.', '19791008 200604 1 008', 'III/d', 'PNS', 'Penelaah Teknis Kebijakan', true),
+  (13, 'LA ODE MUH. ULYUN UNGA, S.Sos', '19710206 200801 1 009', 'III/d', 'PNS', 'Penelaah Teknis Kebijakan', true),
+  (14, 'SITI KORINA, SE.', '19750612 200801 2 014', 'III/d', 'PNS', 'Penelaah Teknis Kebijakan', true),
+  (15, 'IRSANTY JAMAL, S. Sos', '19720706 200701 2 021', 'III/d', 'PNS', 'Penelaah Teknis Kebijakan', true),
+  (16, 'NURLINA, SE.', '19800526 201001 2 003', 'III/d', 'PNS', 'Penelaah Teknis Kebijakan', true),
+  (17, 'SITTI MARLINA SARANANI, ST, M.M', '19740219 200701 2 013', 'III/d', 'PNS', 'Penelaah Teknis Kebijakan', true),
+  (18, 'ANITA HARLIANY, S. Sos, M.M', '19740330 199402 2 003', 'III/d', 'PNS', 'Penelaah Teknis Kebijakan', true),
+  (19, 'ANDI DINI SRI MAJAYANTI, S.Pi', '19840807 201001 2 001', 'III/c', 'PNS', 'Penelaah Teknis Kebijakan', true),
+  (20, 'BAHTIAR, S. Sos', '19800301 201001 1 001', 'III/c', 'PNS', 'Penelaah Teknis Kebijakan', true),
+  (21, 'SITI NURJANNAH, SE.', '19910613 201502 2 002', 'III/c', 'PNS', 'Penelaah Teknis Kebijakan', true),
+  (22, 'WAODE MULIANI NIKA, S.IP, M.M', '19830807 200901 2 001', 'III/c', 'PNS', 'Penelaah Teknis Kebijakan', true),
+  (23, 'ANSARULLAH, SE.', '19760917 200801 1 007', 'III/c', 'PNS', 'Penelaah Teknis Kebijakan', true),
+  (24, 'LIZA NOVITA ARISTA ZALDY, SP', '19770219 201408 2 001', 'III/c', 'PNS', 'Penelaah Teknis Kebijakan', true),
+  (25, 'HASNAWATI, SE., M.M', '19840818 201903 2 013', 'III/b', 'PNS', 'Analis Kebijakan Ahli Pertama', true),
+  (26, 'AJAL SAPUTRA, SE.', '19920216 201903 1 012', 'III/b', 'PNS', 'Penelaah Teknis Kebijakan', true),
+  (27, 'NIRWATI, S.Pd., M.AP', '19800304 201408 2 001', 'III/b', 'PNS', 'Penelaah Teknis Kebijakan', true),
+  (28, 'ASTRININGSIH, SH', '19870926 200604 2 005', 'III/b', 'PNS', 'Penelaah Teknis Kebijakan', true),
+  (29, 'NURYONO, S.Pd', '19911223 202504 1 002', 'III/a', 'CPNS', 'Perencana Ahli Pertama (CPNS)', true),
+  (30, 'LD MUHAMMAD ZULFIKAR S.Pd', '19920212 202504 1 002', 'III/a', 'CPNS', 'Perencana Ahli Pertama (CPNS)', true),
+  (31, 'TUTI HAERANI S.Pd', '19961111 202504 2 009', 'III/a', 'CPNS', 'Perencana Ahli Pertama (CPNS)', true),
+  (32, 'NUZUL RAHMAT, S.Pd', '19980115 202504 1 005', 'III/a', 'CPNS', 'Perencana Ahli Pertama (CPNS)', true),
+  (33, 'SUTARNI S.I.Kom.', '19980606 202504 2 007', 'III/a', 'CPNS', 'Perencana Ahli Pertama (CPNS)', true),
+  (34, 'LA ODE MUHAMMAD DZULVICAR BASRI S.T', '19990302 202504 1 003', 'III/a', 'CPNS', 'Perencana Ahli Pertama (CPNS)', true),
+  (35, 'RACHMAD ILMAWAN. T S.Pd', '19990518 202504 1 007', 'III/a', 'CPNS', 'Perencana Ahli Pertama (CPNS)', true),
+  (36, 'I GUSTI NGURAH PUTU SUTAMA ARI S.Pd', '19990712 202504 1 006', 'III/a', 'CPNS', 'Perencana Ahli Pertama (CPNS)', true),
+  (37, 'DINDA NUR ANNA, S.Pd', '20020103 202504 2 003', 'III/a', 'CPNS', 'Perencana Ahli Pertama (CPNS)', true),
+  (38, 'FANIA PUTRI FAIZA ATTAMIMI, S.Pd', '20030306 202504 2 002', 'III/a', 'CPNS', 'Perencana Ahli Pertama (CPNS)', true),
+  (39, 'LA ODE MUHAMMAD AZIZ RIDAWATAH, S.I.Kom', '19930114 202504 1 001', 'III/a', 'CPNS', 'Analis Kebijakan Ahli Pertama (CPNS)', true),
+  (40, 'VALINTIA MONIKA S.I.Kom', '19940702 202504 2 006', 'III/a', 'CPNS', 'Analis Kebijakan Ahli Pertama (CPNS)', true),
+  (41, 'MUHAMMAD ADITYA MARYADI S.I.Kom', '19961028 202504 1 003', 'III/a', 'CPNS', 'Analis Kebijakan Ahli Pertama (CPNS)', true),
+  (42, 'ALYA PUTRI BALGIS S.Kom', '19980815 202504 2 009', 'III/a', 'CPNS', 'Analis Kebijakan Ahli Pertama (CPNS)', true),
+  (43, 'DIDIK RAHMADI S.M.', '19981129 202504 1 005', 'III/a', 'CPNS', 'Analis Kebijakan Ahli Pertama (CPNS)', true),
+  (44, 'AFRY ANTO S.I.Kom.', '19980420 202504 1 005', 'III/a', 'CPNS', 'Analis Kebijakan Ahli Pertama (CPNS)', true),
+  (45, 'MUH. IRVHAN AL ANSHAR JUNAIT S.T', '19990319 202504 1 003', 'III/a', 'CPNS', 'Analis Kebijakan Ahli Pertama (CPNS)', true),
+  (46, 'ARIF ASBULLAH S.M.', '20000911 202504 1 008', 'III/a', 'CPNS', 'Analis Kebijakan Ahli Pertama (CPNS)', true),
+  (47, 'I KADEK ADI KUSUMA KENCANA, S.M', '20010424 202504 1 006', 'III/a', 'CPNS', 'Analis Kebijakan Ahli Pertama (CPNS)', true),
+  (48, 'NURUL FITRI ARTISYAH, S.I.Kom', '20021116 202504 2 005', 'III/a', 'CPNS', 'Analis Kebijakan Ahli Pertama (CPNS)', true),
+  (49, 'HARMAWATI HASANI, SE', '19690408 202521 2 002', '-', 'PPPK', 'Penata Layanan Operasional (PPPK)', true),
+  (50, 'HARIYATI, SE., M.M', '19930504 202521 2 030', '-', 'PPPK', 'Penata Layanan Operasional (PPPK)', true),
+  (51, 'LIA SELVIANA, SE.', '19930509 202521 2 034', '-', 'PPPK', 'Penata Layanan Operasional (PPPK)', true),
+  (52, 'MUH. IKHWANULLAH, SKM', '19770606 202521 1 022', '-', 'PPPK', 'Penata Layanan Operasional (PPPK)', true)
 on conflict (nip) do nothing;

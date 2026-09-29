@@ -40,10 +40,31 @@ window.addEventListener('offline', updateOnlineStatus);
 
 // =====================================================================
 // ROTATING QR — HMAC-SHA256 berbasis waktu, berputar tiap 10 detik
-// Payload: "<stafId>.<timeSlot>.<kodeHex>"
+// Payload (HURUF BESAR agar QR lebih kecil/rapat-rendah & mudah dipindai):
+//   "<ID32HEX>.<SLOT-BASE36>.<KODE10HEX>"
+// Jam disamakan ke waktu SERVER (server_time_ms) agar HP pegawai dan
+// perangkat Admin tidak salah hitung slot bila jam perangkatnya berbeda.
 // =====================================================================
+let CLOCK_OFFSET = 0; // ms; waktuServer - waktuPerangkat
+let CLOCK_SYNCED = false;
+function nowMs() {
+  return Date.now() + CLOCK_OFFSET;
+}
+async function syncClock() {
+  try {
+    const t0 = Date.now();
+    const server = await StafDB.serverTimeMs();
+    const t1 = Date.now();
+    if (Number.isFinite(server) && server > 0) {
+      CLOCK_OFFSET = server + (t1 - t0) / 2 - t1;
+      CLOCK_SYNCED = true;
+    }
+  } catch (err) {
+    console.warn('Sinkronisasi jam server gagal (jalankan ulang supabase/schema.sql):', err.message);
+  }
+}
 function currentTimeSlot() {
-  return Math.floor(Date.now() / 10000);
+  return Math.floor(nowMs() / 10000);
 }
 async function hmacHex(secret, message) {
   const enc = new TextEncoder();
@@ -55,18 +76,20 @@ async function hmacHex(secret, message) {
 }
 async function computeRotatingPayload(stafId, secret, slot) {
   const code = (await hmacHex(secret, stafId + ':' + slot)).slice(0, 10);
-  return `${stafId}.${slot}.${code}`;
+  return `${stafId.replace(/-/g, '')}.${slot.toString(36)}.${code}`.toUpperCase();
 }
 async function validateRotatingPayload(payload) {
-  const parts = (payload || '').split('.');
+  const parts = (payload || '').trim().toUpperCase().split('.');
   if (parts.length !== 3) return { ok: false, reason: 'format' };
-  const [stafId, slotStr, code] = parts;
-  const staf = STAF.find((p) => p.id === stafId);
+  const [idC, slotStr, code] = parts;
+  const staf = STAF.find((p) => p.id.replace(/-/g, '').toUpperCase() === idC);
   if (!staf) return { ok: false, reason: 'notfound' };
-  const slot = parseInt(slotStr, 10);
-  const nowSlot = currentTimeSlot();
-  if (!Number.isFinite(slot) || Math.abs(nowSlot - slot) > 1) return { ok: false, reason: 'expired', staf };
-  const expected = (await hmacHex(staf.qrToken, stafId + ':' + slot)).slice(0, 10);
+  const slot = parseInt(slotStr, 36);
+  if (!Number.isFinite(slot)) return { ok: false, reason: 'format', staf };
+  const diff = currentTimeSlot() - slot;
+  const tol = CLOCK_SYNCED ? 1 : 3; // jam belum tersinkron → toleransi lebih longgar
+  if (Math.abs(diff) > tol) return { ok: false, reason: 'expired', staf, diff };
+  const expected = (await hmacHex(staf.qrToken, staf.id + ':' + slot)).slice(0, 10).toUpperCase();
   if (expected !== code) return { ok: false, reason: 'invalid', staf };
   return { ok: true, staf };
 }
@@ -430,6 +453,8 @@ document.getElementById('btnMulaiScan').addEventListener('click', () => {
   document.getElementById('tidakHadirBox').style.display = 'none';
   document.getElementById('absenIdleHint').style.display = 'none';
   document.getElementById('scanBox').style.display = 'block';
+  document.getElementById('scanDebug').textContent = '';
+  syncClock(); // samakan jam dengan server (tidak menghalangi kamera)
   startScanner();
 });
 document.getElementById('btnStopScan').addEventListener('click', () => {
@@ -437,30 +462,52 @@ document.getElementById('btnStopScan').addEventListener('click', () => {
   document.getElementById('scanBox').style.display = 'none';
   document.getElementById('absenIdleHint').style.display = 'block';
 });
-function startScanner() {
+
+// Area pindai proporsional dengan ukuran video (bukan angka tetap)
+function scanQrbox(vw, vh) {
+  const size = Math.max(120, Math.floor(Math.min(vw, vh) * 0.78));
+  return { width: size, height: size };
+}
+async function startScanner() {
   const hint = document.getElementById('scanHint');
   hint.textContent = 'Meminta izin kamera...';
   if (typeof Html5Qrcode === 'undefined') {
-    hint.textContent = 'Pustaka pemindai QR gagal dimuat. Periksa koneksi internet.';
+    hint.textContent = 'Pustaka pemindai QR gagal dimuat. Periksa koneksi internet lalu muat ulang halaman.';
     return;
   }
-  html5QrCode = new Html5Qrcode('qrReader');
-  html5QrCode
-    .start({ facingMode: 'environment' }, { fps: 10, qrbox: 230 }, onScanSuccess, () => {})
-    .then(() => (hint.textContent = 'Arahkan kamera ke QR di layar pegawai — kamera tetap aktif untuk pegawai berikutnya.'))
-    .catch((err) => {
-      hint.textContent = 'Gagal mengakses kamera: ' + err;
-    });
+  await stopScannerAsync();
+  const ctorCfg = { verbose: false, experimentalFeatures: { useBarCodeDetectorIfSupported: true } };
+  if (typeof Html5QrcodeSupportedFormats !== 'undefined') ctorCfg.formatsToSupport = [Html5QrcodeSupportedFormats.QR_CODE];
+  const inst = new Html5Qrcode('qrReader', ctorCfg);
+  html5QrCode = inst;
+  const cfg = { fps: 12, qrbox: scanQrbox };
+  const okMsg = 'Arahkan kamera ke QR di layar HP pegawai (kecerahan layar dinaikkan) — kamera tetap aktif untuk pegawai berikutnya.';
+  try {
+    await inst.start({ facingMode: 'environment' }, cfg, onScanSuccess, () => {});
+    hint.textContent = okMsg;
+  } catch (e1) {
+    // Laptop/PC umumnya tidak punya kamera "environment" → pakai kamera yang tersedia
+    try {
+      const cams = await Html5Qrcode.getCameras();
+      if (!cams || !cams.length) throw new Error('tidak ada kamera terdeteksi');
+      await inst.start(cams[0].id, cfg, onScanSuccess, () => {});
+      hint.textContent = okMsg;
+    } catch (e2) {
+      hint.textContent = 'Gagal mengakses kamera: ' + (e2 && e2.message ? e2.message : e2) + '. Pastikan izin kamera diberikan dan halaman dibuka lewat HTTPS.';
+    }
+  }
+}
+function stopScannerAsync() {
+  if (!html5QrCode) return Promise.resolve();
+  const inst = html5QrCode;
+  html5QrCode = null;
+  return inst
+    .stop()
+    .then(() => inst.clear())
+    .catch(() => {});
 }
 function stopScanner() {
-  if (html5QrCode) {
-    const inst = html5QrCode;
-    html5QrCode = null;
-    inst
-      .stop()
-      .then(() => inst.clear())
-      .catch(() => {});
-  }
+  stopScannerAsync();
 }
 let lastScan = { text: null, time: 0 };
 function flashScan(icon, name, sub, isError) {
@@ -468,26 +515,63 @@ function flashScan(icon, name, sub, isError) {
   el.className = 'scan-flash show' + (isError ? ' err' : '');
   el.innerHTML = `<div class="sf-icon">${icon}</div><div class="sf-name">${esc(name)}</div><div class="sf-sub">${esc(sub)}</div>`;
   clearTimeout(window._flashTimer);
-  window._flashTimer = setTimeout(() => el.classList.remove('show'), 1400);
+  window._flashTimer = setTimeout(() => el.classList.remove('show'), 1800);
+}
+function scanDebug(msg) {
+  const el = document.getElementById('scanDebug');
+  if (el) el.textContent = new Date().toLocaleTimeString('id-ID') + ' — ' + msg;
+}
+// Ambil data terbaru pegawai (tanda tangan & kunci QR bisa berubah setelah daftar dimuat)
+async function refreshStafFromPayload(payload) {
+  const idC = (payload || '').trim().toUpperCase().split('.')[0];
+  const findLocal = () => STAF.find((p) => p.id.replace(/-/g, '').toUpperCase() === idC);
+  let local = findLocal();
+  if (!local) {
+    // pegawai baru mungkin belum ada di daftar lokal → muat ulang daftar
+    try {
+      STAF = await StafDB.listStaf();
+    } catch (e) {
+      /* abaikan */
+    }
+    local = findLocal();
+  }
+  if (local) {
+    const fresh = await StafDB.getStafById(local.id).catch(() => null);
+    if (fresh) Object.assign(local, fresh);
+  }
 }
 async function onScanSuccess(decodedText) {
   const now = Date.now();
   if (decodedText === lastScan.text && now - lastScan.time < 4000) return;
   lastScan = { text: decodedText, time: now };
+  scanDebug('QR terbaca, memverifikasi…');
   try {
+    await refreshStafFromPayload(decodedText);
     const res = await validateRotatingPayload(decodedText);
     if (!res.ok) {
-      const msgs = { notfound: 'QR tidak dikenali.', expired: 'QR sudah kedaluwarsa — minta pegawai buka ulang halaman QR.', invalid: 'Kode QR tidak valid.', format: 'Format QR tidak dikenali.' };
-      flashScan('⚠️', res.staf ? res.staf.nama : 'Gagal', msgs[res.reason] || 'Coba pindai ulang.', true);
+      const detik = res.diff != null ? Math.abs(res.diff) * 10 : 0;
+      const msgs = {
+        notfound: 'QR tidak dikenali (pegawai tidak ada di daftar).',
+        expired: `QR kedaluwarsa (selisih ±${detik} detik) — minta pegawai membuka ulang tab QR.`,
+        invalid: 'Kode QR tidak valid.',
+        format: 'Format QR tidak dikenali — pastikan yang dipindai adalah QR dari halaman "QR Saya".',
+      };
+      scanDebug('DITOLAK: ' + (msgs[res.reason] || res.reason));
+      flashScan('⚠️', res.staf ? res.staf.nama : 'QR ditolak', msgs[res.reason] || 'Coba pindai ulang.', true);
       return;
     }
     const staf = res.staf;
     if (!staf.aktif) {
+      scanDebug('DITOLAK: pegawai tidak aktif');
       flashScan('🚫', staf.nama, 'Status pegawai tidak aktif.', true);
       return;
     }
     const tanggal = absenTanggalEl.value;
     const jenisApel = absenJenisApelEl.value;
+    if (!tanggal) {
+      flashScan('⚠️', 'Tanggal kosong', 'Pilih tanggal absen terlebih dahulu.', true);
+      return;
+    }
     const status = staf.kategori === 'PPPK' ? 'HADIR_P3K' : 'HADIR';
     await StafDB.upsertKehadiranSatu({
       tanggal,
@@ -498,12 +582,14 @@ async function onScanSuccess(decodedText) {
       tandaTangan: staf.tandaTangan || null,
       metode: 'QR',
     });
+    scanDebug('BERHASIL: ' + staf.nama + ' — ' + STATUS_LABEL_STAF[status]);
     const sub = staf.tandaTangan ? 'Kehadiran tercatat ✓ tanda tangan tersimpan' : 'Kehadiran tercatat — pegawai belum menyimpan tanda tangan';
     flashScan('✅', staf.nama, sub, false);
     logSesi(staf.nama, status, 'QR');
     renderDashboardStaf();
   } catch (err) {
-    flashScan('⚠️', 'Gagal', err.message, true);
+    scanDebug('ERROR: ' + err.message);
+    flashScan('⚠️', 'Gagal menyimpan', err.message, true);
   }
 }
 
@@ -591,7 +677,7 @@ function renderStafTable() {
   const q = (document.getElementById('searchStaf').value || '').toLowerCase();
   const kat = document.getElementById('filterKategori').value;
   const tbody = document.getElementById('tabelStaf');
-  const rows = STAF.filter((p) => (p.nama.toLowerCase().includes(q) || p.nip.includes(q)) && (!kat || p.kategori === kat)).sort((a, b) => a.nama.localeCompare(b.nama));
+  const rows = STAF.filter((p) => (p.nama.toLowerCase().includes(q) || p.nip.includes(q)) && (!kat || p.kategori === kat)).sort((a, b) => (a.urutan || 9999) - (b.urutan || 9999) || a.nama.localeCompare(b.nama));
   tbody.innerHTML =
     rows
       .map(
@@ -679,11 +765,13 @@ document.getElementById('btnSimpanStaf').addEventListener('click', async () => {
   btn.disabled = true;
   try {
     if (id) {
-      const updated = await StafDB.updateStaf(id, { nama, nip, golongan, kategori, jabatan, aktif });
+      const existing = STAF.find((x) => x.id === id);
+      const updated = await StafDB.updateStaf(id, { nama, nip, golongan, kategori, jabatan, aktif, urutan: existing ? existing.urutan : 9999 });
       const idx = STAF.findIndex((x) => x.id === id);
       STAF[idx] = { ...STAF[idx], ...updated };
     } else {
-      const created = await StafDB.insertStaf({ nama, nip, golongan, kategori, jabatan, aktif });
+      const urutan = STAF.reduce((max, x) => Math.max(max, x.urutan || 0), 0) + 1;
+      const created = await StafDB.insertStaf({ nama, nip, golongan, kategori, jabatan, aktif, urutan });
       STAF.push(created);
     }
     document.getElementById('modalStaf').classList.add('hidden');
@@ -735,7 +823,7 @@ async function getRekapDataStaf() {
   return { mode, dari, sampai, jenisApel, rows };
 }
 function renderRekapHarianStaf(data) {
-  const rows = data.rows.slice().sort((a, b) => a.staf.nama.localeCompare(b.staf.nama));
+  const rows = data.rows.slice().sort((a, b) => (a.staf.urutan || 9999) - (b.staf.urutan || 9999) || a.staf.nama.localeCompare(b.staf.nama));
   const body =
     rows
       .map((r, i) => `<tr><td>${i + 1}</td><td>${esc(r.staf.nama)}</td><td>${esc(r.staf.golongan)}</td><td>${esc(r.staf.jabatan)}</td><td><span class="badge" style="background:${STATUS_COLOR_STAF[r.status]}">${STATUS_LABEL_STAF[r.status]}</span></td><td>${r.tandaTangan ? '✔️ Ada' : '—'}</td></tr>`)
@@ -751,7 +839,7 @@ function renderRekapRangeStaf(data) {
     if (!byStaf[r.stafId]) byStaf[r.stafId] = { staf: r.staf, ...Object.fromEntries(STATUS_LIST_STAF.map((s) => [s, 0])) };
     byStaf[r.stafId][r.status]++;
   });
-  const arr = Object.values(byStaf).sort((a, b) => a.staf.nama.localeCompare(b.staf.nama));
+  const arr = Object.values(byStaf).sort((a, b) => (a.staf.urutan || 9999) - (b.staf.urutan || 9999) || a.staf.nama.localeCompare(b.staf.nama));
   const head = STATUS_LIST_STAF.map((s) => `<th>${STATUS_LABEL_STAF[s]}</th>`).join('');
   const body = arr.map((r, i) => `<tr><td>${i + 1}</td><td>${esc(r.staf.nama)}</td>${STATUS_LIST_STAF.map((s) => `<td>${r[s]}</td>`).join('')}</tr>`).join('') || `<tr><td colspan="${2 + STATUS_LIST_STAF.length}" class="muted">Tidak ada data.</td></tr>`;
   const tot = Object.fromEntries(STATUS_LIST_STAF.map((s) => [s, 0]));
@@ -783,56 +871,32 @@ function doPrint(html, landscape) {
   area.classList.toggle('landscape', !!landscape);
   window.print();
 }
-function letterheadGeneric(title, sub) {
-  return `<div class="print-kop">
-    <img src="${LOGO_SULTRA}" alt="Logo Sulawesi Tenggara">
-    <div class="kop-text"><h3>PEMERINTAH PROVINSI SULAWESI TENGGARA</h3><h4>SEKRETARIAT DAERAH</h4><div class="kop-addr">${esc(ORG_SETTINGS.namaBiro)}</div></div>
-  </div><div class="print-doctitle"><div class="t1">${title}</div><div class="t2">${sub}</div></div>`;
-}
 function buildDaftarHadirHtml({ tanggal, jenisApel, rows }) {
-  const sorted = rows.slice().sort((a, b) => a.staf.nama.localeCompare(b.staf.nama));
+  const sorted = rows.slice().sort((a, b) => (a.staf.urutan || 9999) - (b.staf.urutan || 9999) || a.staf.nama.localeCompare(b.staf.nama));
   let no = 0;
   const body = sorted
     .map((r) => {
       no++;
       let ttd;
-      if (r.tandaTangan) ttd = `<img src="${r.tandaTangan}">`;
-      else if (r.status && r.status !== 'HADIR' && r.status !== 'HADIR_P3K') ttd = `<i>${STATUS_LABEL_STAF[r.status]}</i>`;
-      else ttd = `<span class="dotline">&nbsp;</span>`;
+      if (r.tandaTangan) {
+        ttd = `<img src="${r.tandaTangan}">`;
+      } else if (r.status && r.status !== 'HADIR' && r.status !== 'HADIR_P3K') {
+        const ket = (r.keterangan || '').trim();
+        ttd = `<i>${esc(STATUS_LABEL_STAF[r.status])}${ket && ket !== '-' ? ' — ' + esc(ket) : ''}</i>`;
+      } else {
+        ttd = `<span class="dotline">&nbsp;</span>`;
+      }
       return `<tr><td class="dh-no">${no}</td><td class="dh-nama"><span class="n1">${esc(r.staf.nama)}</span><span class="n2">${esc(r.staf.nip)}</span></td><td class="dh-gol">${esc(r.staf.golongan)}</td><td class="dh-jabatan">${esc(r.staf.jabatan)}</td><td class="dh-ttd">${ttd}</td></tr>`;
     })
     .join('');
-  const table = `<table class="dh-table"><colgroup><col style="width:5%"><col style="width:26%"><col style="width:8%"><col style="width:31%"><col style="width:30%"></colgroup>
-    <thead><tr><th>No</th><th>Nama Pegawai</th><th>Gol</th><th>Jabatan</th><th>Tanda Tangan</th></tr></thead>
+  const table = `<table class="dh-table"><colgroup><col style="width:5%"><col style="width:24%"><col style="width:8%"><col style="width:28%"><col style="width:35%"></colgroup>
+    <thead><tr><th>No</th><th>Nama Pegawai</th><th>Gol</th><th>Jabatan</th><th>Tanda Tangan / Keterangan</th></tr></thead>
     <tbody>${body}</tbody></table>`;
-  const c = Object.fromEntries(STATUS_LIST_STAF.map((s) => [s, 0]));
-  rows.forEach((r) => {
-    if (r.status && c[r.status] !== undefined) c[r.status]++;
-  });
-  const catatan = `<div class="dh-catatan">
-    <div class="col"><b>CATATAN:</b>
-      <div>1. Hadir = ${c.HADIR} Orang</div>
-      <div>2. Ijin = ${c.IZIN} Orang</div>
-      <div>3. Sakit = ${c.SAKIT} Orang</div>
-      <div>4. Cuti = ${c.CUTI} Orang</div>
-    </div>
-    <div class="col"><b>&nbsp;</b>
-      <div>5. Tanpa Keterangan = ${c.TK} Orang</div>
-      <div>6. Tugas Luar = ${c.TUGAS_LUAR} Orang</div>
-      <div>7. Hadir P3K = ${c.HADIR_P3K} Orang</div>
-      <div>8. Cuti P3K = ${c.CUTI_P3K} Orang</div>
-    </div>
-  </div>`;
-  const sign = `<div class="dh-ttd-block">
-    <div class="jabatan-ttd">KEPALA ${esc(ORG_SETTINGS.namaBiro).toUpperCase()}<br>SETDA PROVINSI SULAWESI TENGGARA</div>
-    <div class="dh-ttd-space"></div>
-    <div class="nama-ttd">${esc(ORG_SETTINGS.kepalaNama) || '..............................................'}</div>
-    <div>${esc(ORG_SETTINGS.kepalaPangkat) || ''}</div>
-    <div>NIP. ${esc(ORG_SETTINGS.kepalaNip) || '..............................................'}</div>
-  </div>`;
+  // Header (kop surat) dan footer (catatan rekap + tanda tangan Kepala Biro)
+  // sengaja TIDAK disertakan lagi pada hasil cetak ini — hanya judul singkat + tabel.
   return `<div class="dh-title">DAFTAR HADIR PNS, CPNS DAN PPPK</div><div class="dh-sub">${esc(ORG_SETTINGS.namaBiro).toUpperCase()} SETDA PROV. SULTRA</div>
     <div class="dh-meta-row"><span>HARI/TANGGAL : ${fmtTgl(tanggal)}</span><span>APEL : ${jenisApel === 'Apel Pagi' ? 'PAGI' : 'SORE'}</span></div>
-    ${table}${catatan}${sign}`;
+    ${table}`;
 }
 document.getElementById('btnCetakDaftarHadir').addEventListener('click', async () => {
   const mode = document.getElementById('rekapModeStaf').value;
@@ -847,7 +911,7 @@ document.getElementById('btnCetakDaftarHadir').addEventListener('click', async (
       const raw = await StafDB.listKehadiranStaf({ dari: tanggal, sampai: tanggal, jenisApel });
       const rows = STAF.filter((p) => p.aktif).map((p) => {
         const k = raw.find((x) => x.stafId === p.id);
-        return { staf: p, status: k ? k.status : null, tandaTangan: k ? k.tandaTangan : null };
+        return { staf: p, status: k ? k.status : null, tandaTangan: k ? k.tandaTangan : null, keterangan: k ? k.keterangan : '' };
       });
       doPrint(buildDaftarHadirHtml({ tanggal, jenisApel, rows }), false);
     } catch (err) {
@@ -863,12 +927,14 @@ document.getElementById('btnCetakDaftarHadir').addEventListener('click', async (
       if (!arr[r.stafId]) arr[r.stafId] = { staf: r.staf, ...Object.fromEntries(STATUS_LIST_STAF.map((s) => [s, 0])) };
       arr[r.stafId][r.status]++;
     });
-    const list = Object.values(arr).sort((a, b) => a.staf.nama.localeCompare(b.staf.nama));
+    const list = Object.values(arr).sort((a, b) => (a.staf.urutan || 9999) - (b.staf.urutan || 9999) || a.staf.nama.localeCompare(b.staf.nama));
     const head = STATUS_LIST_STAF.map((s) => `<th>${STATUS_LABEL_STAF[s]}</th>`).join('');
     const body = list.map((r, i) => `<tr><td>${i + 1}</td><td>${esc(r.staf.nama)}</td>${STATUS_LIST_STAF.map((s) => `<td class="num">${r[s]}</td>`).join('')}</tr>`).join('');
     const table = `<div class="print-table-wrap"><table class="print-table"><thead><tr><th class="num">No</th><th>Nama</th>${head}</tr></thead><tbody>${body}</tbody></table></div>`;
     const sub = `Periode: ${lastRekapStaf.dari} s.d. ${lastRekapStaf.sampai}`;
-    doPrint(letterheadGeneric('REKAPITULASI KEHADIRAN PEGAWAI', sub) + table, true);
+    // Tanpa kop surat (header) & tanpa blok tanda tangan (footer) — hanya judul + tabel.
+    const titleBlock = `<div class="dh-title">REKAPITULASI KEHADIRAN PEGAWAI</div><div class="dh-sub">${esc(ORG_SETTINGS.namaBiro).toUpperCase()} SETDA PROV. SULTRA</div><div class="dh-meta-row"><span>${esc(sub)}</span><span></span></div>`;
+    doPrint(titleBlock + table, true);
   }
 });
 
@@ -943,6 +1009,7 @@ async function bootAdmin() {
   document.getElementById('todayLabel').textContent = fmtTgl(todayStr());
   const ok = await checkConnection();
   if (!ok) return;
+  syncClock();
   try {
     ORG_SETTINGS = await StafDB.getOrgSettings();
     STAF = await StafDB.listStaf();
@@ -1063,24 +1130,33 @@ document.getElementById('btnSimpanTtd').addEventListener('click', async () => {
 });
 
 // --- QR Saya (rotating) ---
+let lastDrawnSlot = null;
 async function drawRotatingQr() {
   if (!PEGAWAI_SESSION) return;
   const c = document.getElementById('rotatingQrCanvas');
   if (!window.QRCode) {
+    stopRotatingQr();
     const label = document.getElementById('qrCountdownLabel');
     if (label) label.textContent = 'Pustaka QR gagal dimuat — periksa koneksi internet lalu muat ulang halaman.';
     return;
   }
   const slot = currentTimeSlot();
+  lastDrawnSlot = slot; // tandai lebih dulu agar tidak tergambar ganda
   const payload = await computeRotatingPayload(PEGAWAI_SESSION.id, PEGAWAI_SESSION.qrToken, slot);
-  QRCode.toCanvas(c, payload, { width: 220, margin: 1, color: { dark: '#0F2A47', light: '#FFFFFF' } }, () => {});
+  // Margin (quiet zone) 4 modul + koreksi kesalahan M = mudah dibaca kamera dari layar HP
+  QRCode.toCanvas(c, payload, { width: 260, margin: 4, errorCorrectionLevel: 'M', color: { dark: '#0F2A47', light: '#FFFFFF' } }, () => {});
 }
 function startRotatingQr() {
   stopRotatingQr();
+  lastDrawnSlot = null;
   drawRotatingQr();
+  // Samakan jam dengan server lalu gambar ulang bila slot berubah karenanya
+  syncClock().then(() => {
+    if (qrRotateInterval && currentTimeSlot() !== lastDrawnSlot) drawRotatingQr();
+  });
   const circleLen = 100.5;
   qrRotateInterval = setInterval(() => {
-    const msIntoSlot = Date.now() % 10000;
+    const msIntoSlot = nowMs() % 10000;
     const remaining = Math.ceil((10000 - msIntoSlot) / 1000);
     const label = document.getElementById('qrCountdownLabel');
     if (label) label.textContent = remaining;
@@ -1089,13 +1165,18 @@ function startRotatingQr() {
       const frac = (10000 - msIntoSlot) / 10000;
       circle.style.strokeDashoffset = (circleLen * (1 - frac)).toFixed(1);
     }
-    if (msIntoSlot < 260) drawRotatingQr();
+    // Gambar ulang setiap slot berganti (tidak bergantung pada ketepatan timer,
+    // karena browser HP sering memperlambat timer)
+    if (currentTimeSlot() !== lastDrawnSlot) drawRotatingQr();
   }, 250);
 }
 function stopRotatingQr() {
   if (qrRotateInterval) clearInterval(qrRotateInterval);
   qrRotateInterval = null;
 }
+document.addEventListener('visibilitychange', () => {
+  if (!document.hidden && qrRotateInterval && currentTimeSlot() !== lastDrawnSlot) drawRotatingQr();
+});
 
 async function bootPegawai(staf) {
   PEGAWAI_SESSION = staf;

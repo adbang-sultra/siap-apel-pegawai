@@ -118,7 +118,7 @@
 @media print{
   .dh-title{text-align:center;font-size:13.5px;font-weight:800;letter-spacing:.4px;text-transform:uppercase;margin:2px 0;}
   .dh-sub{text-align:center;font-size:11.5px;font-weight:700;margin:1px 0 10px;text-transform:uppercase;}
-  .dh-meta-row{display:flex;justify-content:space-between;font-size:11.5px;margin:8px 0 10px;font-weight:600;}
+  .dh-meta-row{display:flex;justify-content:space-between;font-size:11.5px;margin:8px 0 10px;font-weight:600;border-bottom:1px solid #444;padding-bottom:8px;}
 
   table.dh-table{width:100%;border-collapse:collapse;font-size:10px;table-layout:fixed;}
   table.dh-table th,table.dh-table td{border:1px solid #222;padding:4px 5px;vertical-align:middle;}

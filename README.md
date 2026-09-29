@@ -21,7 +21,9 @@ siap-apel-pegawai/
 │  ├─ signature-pad.js         Komponen tanda tangan digital (canvas)
 │  └─ staf-app.js              Logika UI, QR berputar (HMAC), scan kontinu
 ├─ assets/                  Logo & ikon aplikasi
-├─ supabase/schema.sql      Tabel, RLS, dan fungsi login (security definer)
+├─ supabase/
+│  ├─ schema.sql             Tabel, RLS, dan fungsi login (security definer)
+│  └─ data_pegawai.sql        Impor 52 pegawai Biro Administrasi Pembangunan (opsional)
 ├─ vercel.json              Konfigurasi deploy Vercel
 └─ README.md
 ```
@@ -30,9 +32,10 @@ siap-apel-pegawai/
 
 1. Buat/pakai project di [supabase.com](https://supabase.com).
 2. **SQL Editor → New query** → salin seluruh isi `supabase/schema.sql` → **Run**.
-   - Membuat tabel `org_settings`, `admin_users`, `staf`, `kehadiran_staf`, RLS, fungsi login, dan data contoh.
-   - **Aman dijalankan ulang / di project yang sudah pernah dipakai versi sebelumnya** — skrip ini memakai `IF NOT EXISTS` dan migrasi otomatis untuk kolom baru.
-3. **Project Settings → API** → catat **Project URL** dan **anon / public key**.
+   - Membuat tabel `org_settings`, `admin_users`, `staf`, `kehadiran_staf`, RLS, fungsi login, fungsi `server_time_ms()` (penyamaan jam untuk QR berputar), dan **52 data pegawai Biro Administrasi Pembangunan** langsung terisi (sesuai Daftar Hadir fisik).
+   - **Aman dijalankan ulang / di project yang sudah pernah dipakai versi sebelumnya** — skrip ini memakai `IF NOT EXISTS` dan migrasi otomatis untuk kolom baru (termasuk kolom urutan pegawai).
+3. **Sudah pernah pakai versi sebelumnya dan tidak ingin data lama tertimpa?** Jalankan `supabase/data_pegawai.sql` sebagai gantinya (setelah `schema.sql`) — file ini meng-**upsert** 52 pegawai berdasarkan NIP (tidak mengubah PIN/tanda tangan/QR yang sudah dipakai pegawai) dan otomatis membersihkan data contoh lama yang belum pernah dipakai sama sekali.
+4. **Project Settings → API** → catat **Project URL** dan **anon / public key**.
 
 ## 2. Menghubungkan aplikasi ke Supabase
 
@@ -83,14 +86,25 @@ Atau import folder ini sebagai project baru lewat dashboard Vercel (preset **Oth
 
 ## 6. Tentang kode QR yang berputar
 
-Kode QR dibuat dari kombinasi `id pegawai + slot waktu (10 detik) + tanda HMAC-SHA256`, dihitung langsung di browser pegawai (Web Crypto API) dan diverifikasi di browser Admin saat scan — cocok untuk mencegah kecurangan sederhana seperti memfoto/screenshot QR untuk dipakai orang lain atau di waktu lain, karena kode kedaluwarsa dalam hitungan detik.
+Kode QR dibuat dari kombinasi `id pegawai + slot waktu (10 detik) + tanda HMAC-SHA256`, dihitung langsung di browser pegawai (Web Crypto API) dan diverifikasi di browser Admin saat scan — cocok untuk mencegah kecurangan sederhana seperti memfoto/screenshot QR untuk dipakai orang lain atau di waktu lain, karena kode kedaluwarsa dalam hitungan detik. Jam HP pegawai dan perangkat Admin **otomatis disamakan lewat waktu server** (fungsi `server_time_ms()`) setiap kali layar Scan/QR dibuka, supaya kode tidak salah dianggap kedaluwarsa hanya karena jam kedua perangkat berbeda.
 
-**Batasan yang perlu diketahui:** karena aplikasi ini murni statis (tanpa server backend selain Supabase), kunci rahasia di balik kode QR (`qr_token`) tersimpan di tabel `staf` yang bisa diakses lewat anon key. Ini cukup untuk mencegah kecurangan kasual (foto/screenshot QR), tapi bukan pengamanan kriptografis tingkat tinggi terhadap pihak yang punya akses teknis ke anon key. Untuk kebutuhan keamanan lebih tinggi, pertimbangkan menambahkan Supabase Auth + Edge Function untuk menyimpan rahasia di sisi server sepenuhnya.
+**Jika kamera tidak berhasil membaca QR:**
+- Pastikan situs dibuka lewat **HTTPS** (bukan `http://`) — Vercel sudah otomatis HTTPS.
+- Di layar "Absen → Mulai Scan QR", ada baris kecil abu-abu (`scanDebug`) yang menampilkan status pemindaian terakhir (mis. "DITOLAK: QR kedaluwarsa…") — berguna untuk mendiagnosis kalau ada masalah.
+- Naikkan kecerahan layar HP pegawai saat menunjukkan QR ke kamera.
+- Di komputer/laptop tanpa kamera belakang, aplikasi otomatis memakai kamera yang tersedia (webcam depan) — tidak perlu diatur manual.
+- Kode QR berganti setiap 10 detik; bila pegawai baru saja login dan langsung memindahkan HP terlalu cepat sebelum QR sempat digambar ulang, cukup tunggu QR berikutnya muncul (ada hitung mundur di layar pegawai).
 
-## 7. Keamanan & catatan penting
+## 7. Tentang hasil cetak
+
+- **Daftar Hadir** (mode harian) dan **Rekapitulasi** (mode rentang tanggal) dicetak **tanpa kop surat dan tanpa blok tanda tangan Kepala Biro** — hanya judul ringkas, info tanggal/apel, dan tabel.
+- Pada kolom **Tanda Tangan**: jika pegawai hadir (lewat scan QR), tanda tangan tersimpannya otomatis ditampilkan sebagai gambar. Jika tidak hadir, kolom menampilkan **keterangan yang diketik Admin** (bila diisi) atau nama status (Izin/Sakit/Cuti/dst.) bila keterangan dikosongkan.
+
+## 8. Keamanan & catatan penting
 
 - **Login Admin & Pegawai adalah gerbang level aplikasi**, diverifikasi lewat fungsi database (`security definer`) yang membandingkan hash bcrypt tanpa pernah mengirim hash tersebut ke browser. Ini cocok untuk pemakaian internal satu biro. Untuk akses dari jaringan terbuka/publik, pertimbangkan menambah Supabase Auth.
 - Menghapus data pegawai akan ikut menghapus seluruh riwayat kehadirannya (`ON DELETE CASCADE`). Gunakan **Nonaktifkan** bila hanya ingin menghentikan pencatatan tanpa kehilangan riwayat.
 - Admin dapat **reset PIN** pegawai (mis. lupa PIN) dari menu Data Pegawai — pegawai kemudian aktivasi ulang dengan PIN baru.
 - Kode QR (`qr_token`) adalah rahasia per pegawai; tidak perlu dan tidak bisa dicetak sebagai kartu statis karena kodenya selalu berubah — cukup ditampilkan lewat sesi login pegawai sendiri.
+- **Batasan yang perlu diketahui** tentang QR berputar: karena aplikasi ini murni statis (tanpa server backend selain Supabase), kunci rahasia di balik kode QR (`qr_token`) tersimpan di tabel `staf` yang bisa diakses lewat anon key. Ini cukup untuk mencegah kecurangan kasual (foto/screenshot QR dipakai ulang), tapi bukan pengamanan kriptografis tingkat tinggi terhadap pihak yang punya akses teknis ke anon key. Untuk kebutuhan keamanan lebih tinggi, pertimbangkan menambahkan Supabase Auth + Edge Function untuk menyimpan rahasia sepenuhnya di sisi server.
 - Fitur kamera (scan QR) **memerlukan HTTPS** — otomatis tersedia di Vercel, tapi tidak akan berfungsi bila diakses lewat `http://` biasa (kecuali `localhost`).

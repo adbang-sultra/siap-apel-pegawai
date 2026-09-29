@@ -19,13 +19,16 @@ const STATUS_HADIR_FISIK = ['HADIR', 'HADIR_P3K'];
 // Status "tidak hadir" yang bisa diinput manual oleh Admin beserta alasannya
 const STATUS_TIDAK_HADIR = STATUS_LIST_STAF.filter((s) => !STATUS_HADIR_FISIK.includes(s));
 
+// Kolom staf yang boleh dibaca klien (pin_hash SENGAJA tidak disertakan)
+const STAF_COLS = 'id, nama, nip, golongan, kategori, jabatan, urutan, qr_token, tanda_tangan, aktif, punya_pin';
+
 const throwIfErrorStaf = window.throwIfError;
 function clientStaf() {
   return window.SB.client();
 }
 
 function rowToStaf(r) {
-  return { id: r.id, nama: r.nama, nip: r.nip, golongan: r.golongan, kategori: r.kategori, jabatan: r.jabatan, qrToken: r.qr_token, tandaTangan: r.tanda_tangan, aktif: r.aktif, punyaPin: r.punya_pin === true };
+  return { id: r.id, nama: r.nama, nip: r.nip, golongan: r.golongan, kategori: r.kategori, jabatan: r.jabatan, urutan: r.urutan == null ? 9999 : r.urutan, qrToken: r.qr_token, tandaTangan: r.tanda_tangan, aktif: r.aktif, punyaPin: r.punya_pin === true };
 }
 function rowToKehadiranStaf(r) {
   return { id: r.id, tanggal: r.tanggal, jenisApel: r.jenis_apel, stafId: r.staf_id, status: r.status, keterangan: r.keterangan, tandaTangan: r.tanda_tangan, metode: r.metode, waktuInput: r.waktu_input };
@@ -78,6 +81,13 @@ const StafDB = {
     return !!data;
   },
 
+  // ---------------- WAKTU SERVER (sinkronisasi jam QR) ----------------
+  async serverTimeMs() {
+    const { data, error } = await clientStaf().rpc('server_time_ms');
+    throwIfErrorStaf(error);
+    return Number(data);
+  },
+
   // ---------------- ORG SETTINGS ----------------
   async getOrgSettings() {
     const { data, error } = await clientStaf().from('org_settings').select('*').eq('id', 1).maybeSingle();
@@ -94,20 +104,20 @@ const StafDB = {
   // supaya hash PIN tidak pernah terkirim ke browser sama sekali. Status
   // aktivasi akun dibaca lewat kolom turunan aman "punya_pin" (boolean).
   async listStaf() {
-    const { data, error } = await clientStaf().from('staf').select('id, nama, nip, golongan, kategori, jabatan, qr_token, tanda_tangan, aktif, punya_pin').order('nama', { ascending: true });
+    const { data, error } = await clientStaf().from('staf').select(STAF_COLS).order('urutan', { ascending: true }).order('nama', { ascending: true });
     throwIfErrorStaf(error);
     return data.map(rowToStaf);
   },
   async getStafById(id) {
-    const { data, error } = await clientStaf().from('staf').select('id, nama, nip, golongan, kategori, jabatan, qr_token, tanda_tangan, aktif, punya_pin').eq('id', id).maybeSingle();
+    const { data, error } = await clientStaf().from('staf').select(STAF_COLS).eq('id', id).maybeSingle();
     throwIfErrorStaf(error);
     return data ? rowToStaf(data) : null;
   },
   async insertStaf(s) {
     const { data, error } = await clientStaf()
       .from('staf')
-      .insert({ nama: s.nama, nip: s.nip, golongan: s.golongan, kategori: s.kategori, jabatan: s.jabatan, aktif: s.aktif })
-      .select('id, nama, nip, golongan, kategori, jabatan, qr_token, tanda_tangan, aktif, punya_pin')
+      .insert({ nama: s.nama, nip: s.nip, golongan: s.golongan, kategori: s.kategori, jabatan: s.jabatan, urutan: s.urutan, aktif: s.aktif })
+      .select(STAF_COLS)
       .single();
     throwIfErrorStaf(error);
     return rowToStaf(data);
@@ -115,9 +125,9 @@ const StafDB = {
   async updateStaf(id, s) {
     const { data, error } = await clientStaf()
       .from('staf')
-      .update({ nama: s.nama, nip: s.nip, golongan: s.golongan, kategori: s.kategori, jabatan: s.jabatan, aktif: s.aktif })
+      .update({ nama: s.nama, nip: s.nip, golongan: s.golongan, kategori: s.kategori, jabatan: s.jabatan, urutan: s.urutan, aktif: s.aktif })
       .eq('id', id)
-      .select('id, nama, nip, golongan, kategori, jabatan, qr_token, tanda_tangan, aktif, punya_pin')
+      .select(STAF_COLS)
       .single();
     throwIfErrorStaf(error);
     return rowToStaf(data);
@@ -128,7 +138,7 @@ const StafDB = {
       .from('staf')
       .update({ golongan, kategori, jabatan })
       .eq('id', id)
-      .select('id, nama, nip, golongan, kategori, jabatan, qr_token, tanda_tangan, aktif, punya_pin')
+      .select(STAF_COLS)
       .single();
     throwIfErrorStaf(error);
     return rowToStaf(data);
@@ -138,7 +148,7 @@ const StafDB = {
       .from('staf')
       .update({ tanda_tangan: dataUrl })
       .eq('id', id)
-      .select('id, nama, nip, golongan, kategori, jabatan, qr_token, tanda_tangan, aktif, punya_pin')
+      .select(STAF_COLS)
       .single();
     throwIfErrorStaf(error);
     return rowToStaf(data);
@@ -149,7 +159,7 @@ const StafDB = {
       .from('staf')
       .update({ qr_token: newToken })
       .eq('id', id)
-      .select('id, nama, nip, golongan, kategori, jabatan, qr_token, tanda_tangan, aktif, punya_pin')
+      .select(STAF_COLS)
       .single();
     throwIfErrorStaf(error);
     return rowToStaf(data);
