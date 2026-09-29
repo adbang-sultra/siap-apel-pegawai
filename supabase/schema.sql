@@ -13,6 +13,15 @@
 
 create extension if not exists "pgcrypto";
 
+-- Menyamakan format NIP sebelum dibandingkan: buang semua spasi.
+-- Dipakai di semua fungsi login/aktivasi supaya NIP dengan atau tanpa
+-- spasi (mis. "19671010 199503 1 006" vs "196710101995031006") dianggap sama.
+create or replace function norm_nip(t text)
+returns text
+language sql immutable as $$
+  select regexp_replace(coalesce(t, ''), '\s+', '', 'g');
+$$;
+
 -- ---------------------------------------------------------------------
 -- Pengaturan organisasi (satu baris tetap) — identitas biro & Kepala Biro
 -- dipakai untuk kop surat & blok tanda tangan pada cetak Daftar Hadir.
@@ -210,7 +219,7 @@ begin
   return query
     select s.id, s.nama, s.nip, s.golongan, s.kategori, s.jabatan, s.aktif, s.qr_token, s.tanda_tangan
     from staf s
-    where s.nip = p_nip and s.pin_hash is not null and s.pin_hash = crypt(p_pin, s.pin_hash);
+    where norm_nip(s.nip) = norm_nip(p_nip) and s.pin_hash is not null and s.pin_hash = crypt(p_pin, s.pin_hash);
 end;
 $$;
 revoke all on function staf_login(text,text) from public;
@@ -221,8 +230,8 @@ create or replace function staf_check_nip(p_nip text)
 returns table(found boolean, nama text, sudah_aktif boolean)
 language plpgsql security definer as $$
 begin
-  if exists (select 1 from staf where nip = p_nip) then
-    return query select true, s.nama, (s.pin_hash is not null) from staf s where s.nip = p_nip;
+  if exists (select 1 from staf where norm_nip(nip) = norm_nip(p_nip)) then
+    return query select true, s.nama, (s.pin_hash is not null) from staf s where norm_nip(s.nip) = norm_nip(p_nip);
   else
     return query select false, null::text, false;
   end if;
@@ -237,7 +246,7 @@ returns boolean
 language plpgsql security definer as $$
 begin
   update staf set pin_hash = crypt(p_pin, gen_salt('bf'))
-  where nip = p_nip and pin_hash is null;
+  where norm_nip(nip) = norm_nip(p_nip) and pin_hash is null;
   return found;
 end;
 $$;
@@ -249,8 +258,8 @@ create or replace function staf_set_pin(p_nip text, p_pin_lama text, p_pin_baru 
 returns boolean
 language plpgsql security definer as $$
 begin
-  if exists (select 1 from staf where nip = p_nip and pin_hash = crypt(p_pin_lama, pin_hash)) then
-    update staf set pin_hash = crypt(p_pin_baru, gen_salt('bf')) where nip = p_nip;
+  if exists (select 1 from staf where norm_nip(nip) = norm_nip(p_nip) and pin_hash = crypt(p_pin_lama, pin_hash)) then
+    update staf set pin_hash = crypt(p_pin_baru, gen_salt('bf')) where norm_nip(nip) = norm_nip(p_nip);
     return true;
   end if;
   return false;

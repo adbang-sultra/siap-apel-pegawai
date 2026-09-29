@@ -819,7 +819,13 @@ async function getRekapDataStaf() {
     return null;
   }
   const raw = await StafDB.listKehadiranStaf({ dari, sampai, jenisApel: jenisApel || undefined });
-  const rows = raw.map((k) => ({ ...k, staf: STAF.find((p) => p.id === k.stafId) })).filter((k) => k.staf);
+  const rows = raw
+    .map((k) => ({ ...k, staf: STAF.find((p) => p.id === k.stafId) }))
+    .filter((k) => k.staf)
+    .map((k) => {
+      const hadirFisik = k.status === 'HADIR' || k.status === 'HADIR_P3K';
+      return { ...k, tandaTangan: k.tandaTangan || (hadirFisik ? k.staf.tandaTangan : null) || null };
+    });
   return { mode, dari, sampai, jenisApel, rows };
 }
 function renderRekapHarianStaf(data) {
@@ -911,7 +917,14 @@ document.getElementById('btnCetakDaftarHadir').addEventListener('click', async (
       const raw = await StafDB.listKehadiranStaf({ dari: tanggal, sampai: tanggal, jenisApel });
       const rows = STAF.filter((p) => p.aktif).map((p) => {
         const k = raw.find((x) => x.stafId === p.id);
-        return { staf: p, status: k ? k.status : null, tandaTangan: k ? k.tandaTangan : null, keterangan: k ? k.keterangan : '' };
+        const status = k ? k.status : null;
+        const hadirFisik = status === 'HADIR' || status === 'HADIR_P3K';
+        // Utamakan tanda tangan yang tersimpan di catatan kehadiran (snapshot saat
+        // scan). Bila kosong tapi statusnya Hadir — misalnya pegawai baru menyimpan
+        // tanda tangan SETELAH di-scan hari itu — pakai tanda tangan profil terkini
+        // sebagai cadangan, supaya tetap tampil di cetakan.
+        const tandaTangan = (k && k.tandaTangan) || (hadirFisik ? p.tandaTangan : null) || null;
+        return { staf: p, status, tandaTangan, keterangan: k ? k.keterangan : '' };
       });
       doPrint(buildDaftarHadirHtml({ tanggal, jenisApel, rows }), false);
     } catch (err) {
@@ -1182,8 +1195,12 @@ async function bootPegawai(staf) {
   PEGAWAI_SESSION = staf;
   showScreen('pegawai');
   fillProfilPegawai(staf);
-  document.querySelectorAll('.pg-tab').forEach((t) => t.classList.toggle('active', t.dataset.tab === 'profil'));
-  document.querySelectorAll('.pg-panel').forEach((p) => p.classList.toggle('active', p.id === 'pg-profil'));
+  // Akun yang berhasil login lewat form (bukan baru aktivasi) berarti sudah
+  // aktif sebelumnya — langsung tampilkan QR supaya pegawai bisa langsung
+  // menunjukkannya ke kamera Admin tanpa perlu tap tab lagi.
+  document.querySelectorAll('.pg-tab').forEach((t) => t.classList.toggle('active', t.dataset.tab === 'qr'));
+  document.querySelectorAll('.pg-panel').forEach((p) => p.classList.toggle('active', p.id === 'pg-qr'));
+  startRotatingQr();
   // Signature pad sengaja TIDAK dibuat di sini — baru dibuat saat tab
   // "Tanda Tangan" benar-benar dibuka (lihat initSignaturePadPegawai),
   // supaya ukuran canvas terhitung dengan benar.
