@@ -871,13 +871,27 @@ document.getElementById('btnTampilkanRekapStaf').addEventListener('click', async
 });
 
 // ---------------- CETAK ----------------
-function doPrint(html, landscape, printTitle) {
+async function doPrint(html, landscape, printTitle) {
   const area = document.getElementById('printArea');
   area.innerHTML = html;
   area.classList.toggle('landscape', !!landscape);
-  // Judul tab browser dipakai sebagian browser sebagai teks header cetak
-  // bawaan (bukan bagian dari halaman ini, jadi tidak bisa dimatikan lewat
-  // CSS) — diganti sementara agar lebih rapi bila header itu tetap tampil.
+  // Tunggu SEMUA gambar (tanda tangan, logo kop surat) selesai dimuat/didekode
+  // SEBELUM memanggil window.print(). Tanpa ini, percobaan cetak PERTAMA bisa
+  // menampilkan gambar kosong karena belum sempat selesai dirender saat
+  // snapshot cetak diambil — percobaan KEDUA tampak normal karena gambar
+  // sudah tersimpan di cache browser dari percobaan pertama.
+  const imgs = Array.from(area.querySelectorAll('img'));
+  await Promise.all(
+    imgs.map((img) => {
+      if (img.complete && img.naturalWidth > 0) {
+        return img.decode ? img.decode().catch(() => {}) : Promise.resolve();
+      }
+      return new Promise((resolve) => {
+        img.addEventListener('load', () => (img.decode ? img.decode().catch(() => {}).then(resolve) : resolve()), { once: true });
+        img.addEventListener('error', resolve, { once: true });
+      });
+    })
+  );
   const originalTitle = document.title;
   if (printTitle) document.title = printTitle;
   window.print();
@@ -962,7 +976,7 @@ document.getElementById('btnCetakDaftarHadir').addEventListener('click', async (
         const tandaTangan = (k && k.tandaTangan) || (hadirFisik ? p.tandaTangan : null) || null;
         return { staf: p, status, tandaTangan, keterangan: k ? k.keterangan : '' };
       });
-      doPrint(buildDaftarHadirHtml({ tanggal, jenisApel, rows }), false, `Daftar Hadir ${jenisApel} ${tanggal}`);
+      await doPrint(buildDaftarHadirHtml({ tanggal, jenisApel, rows }), false, `Daftar Hadir ${jenisApel} ${tanggal}`);
     } catch (err) {
       toast('Gagal menyiapkan cetak: ' + err.message, 'error');
     }
@@ -982,7 +996,7 @@ document.getElementById('btnCetakDaftarHadir').addEventListener('click', async (
     const table = `<div class="print-table-wrap"><table class="print-table"><thead><tr><th class="num">No</th><th>Nama</th>${head}</tr></thead><tbody>${body}</tbody></table></div>`;
     const sub = `Periode: ${lastRekapStaf.dari} s.d. ${lastRekapStaf.sampai}`;
     const titleBlock = `${letterheadKop()}<div class="dh-title">REKAPITULASI KEHADIRAN PEGAWAI</div><div class="dh-sub">${esc(ORG_SETTINGS.namaBiro).toUpperCase()} SETDA PROV. SULTRA</div><div class="dh-meta-row"><span>${esc(sub)}</span><span></span></div>`;
-    doPrint(titleBlock + table, true, `Rekap Kehadiran ${lastRekapStaf.dari} s.d. ${lastRekapStaf.sampai}`);
+    await doPrint(titleBlock + table, true, `Rekap Kehadiran ${lastRekapStaf.dari} s.d. ${lastRekapStaf.sampai}`);
   }
 });
 

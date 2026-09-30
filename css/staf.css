@@ -91,7 +91,7 @@
 /* =====================================================================
    PEGAWAI APP — shell mobile-first sederhana (tanpa sidebar)
    ===================================================================== */
-.pegawai-shell{min-height:100vh;min-height:100dvh;background:var(--bg);display:flex;flex-direction:column;}
+.pegawai-shell{min-height:100vh;min-height:100dvh;height:100vh;height:100dvh;background:var(--bg);display:flex;flex-direction:column;overflow-y:auto;}
 .pegawai-topbar{
   display:flex;align-items:center;gap:12px;padding:14px 18px;padding-top:calc(14px + env(safe-area-inset-top,0px));
   background:linear-gradient(135deg,var(--navy-950),var(--navy-800));color:#fff;position:sticky;top:0;z-index:10;

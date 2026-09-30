@@ -3,7 +3,7 @@
 // Cache app-shell (network-first, fallback ke cache saat offline).
 // Data tetap dari Supabase secara online; SW ini TIDAK menyimpan data absensi.
 // =====================================================================
-const CACHE_NAME = 'siap-apel-pegawai-v3';
+const CACHE_NAME = 'siap-apel-pegawai-v4';
 const SHELL = [
   './',
   './index.html',
