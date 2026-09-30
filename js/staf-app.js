@@ -871,11 +871,23 @@ document.getElementById('btnTampilkanRekapStaf').addEventListener('click', async
 });
 
 // ---------------- CETAK ----------------
-function doPrint(html, landscape) {
+function doPrint(html, landscape, printTitle) {
   const area = document.getElementById('printArea');
   area.innerHTML = html;
   area.classList.toggle('landscape', !!landscape);
+  // Judul tab browser dipakai sebagian browser sebagai teks header cetak
+  // bawaan (bukan bagian dari halaman ini, jadi tidak bisa dimatikan lewat
+  // CSS) — diganti sementara agar lebih rapi bila header itu tetap tampil.
+  const originalTitle = document.title;
+  if (printTitle) document.title = printTitle;
   window.print();
+  if (printTitle) setTimeout(() => (document.title = originalTitle), 500);
+}
+function letterheadKop() {
+  return `<div class="print-kop">
+    <img src="${LOGO_SULTRA}" alt="Logo Sulawesi Tenggara">
+    <div class="kop-text"><h3>PEMERINTAH PROVINSI SULAWESI TENGGARA</h3><h4>SEKRETARIAT DAERAH</h4><div class="kop-addr">${esc(ORG_SETTINGS.namaBiro)}</div></div>
+  </div>`;
 }
 function buildDaftarHadirHtml({ tanggal, jenisApel, rows }) {
   const sorted = rows.slice().sort((a, b) => (a.staf.urutan || 9999) - (b.staf.urutan || 9999) || a.staf.nama.localeCompare(b.staf.nama));
@@ -898,11 +910,35 @@ function buildDaftarHadirHtml({ tanggal, jenisApel, rows }) {
   const table = `<table class="dh-table"><colgroup><col style="width:5%"><col style="width:24%"><col style="width:8%"><col style="width:28%"><col style="width:35%"></colgroup>
     <thead><tr><th>No</th><th>Nama Pegawai</th><th>Gol</th><th>Jabatan</th><th>Tanda Tangan / Keterangan</th></tr></thead>
     <tbody>${body}</tbody></table>`;
-  // Header (kop surat) dan footer (catatan rekap + tanda tangan Kepala Biro)
-  // sengaja TIDAK disertakan lagi pada hasil cetak ini — hanya judul singkat + tabel.
-  return `<div class="dh-title">DAFTAR HADIR PNS, CPNS DAN PPPK</div><div class="dh-sub">${esc(ORG_SETTINGS.namaBiro).toUpperCase()} SETDA PROV. SULTRA</div>
+  const c = Object.fromEntries(STATUS_LIST_STAF.map((s) => [s, 0]));
+  rows.forEach((r) => {
+    if (r.status && c[r.status] !== undefined) c[r.status]++;
+  });
+  const catatan = `<div class="dh-catatan">
+    <div class="col"><b>CATATAN:</b>
+      <div>1. Hadir = ${c.HADIR} Orang</div>
+      <div>2. Ijin = ${c.IZIN} Orang</div>
+      <div>3. Sakit = ${c.SAKIT} Orang</div>
+      <div>4. Cuti = ${c.CUTI} Orang</div>
+    </div>
+    <div class="col"><b>&nbsp;</b>
+      <div>5. Tanpa Keterangan = ${c.TK} Orang</div>
+      <div>6. Tugas Luar = ${c.TUGAS_LUAR} Orang</div>
+      <div>7. Hadir P3K = ${c.HADIR_P3K} Orang</div>
+      <div>8. Cuti P3K = ${c.CUTI_P3K} Orang</div>
+    </div>
+  </div>`;
+  const sign = `<div class="dh-ttd-block">
+    <div class="jabatan-ttd">KEPALA ${esc(ORG_SETTINGS.namaBiro).toUpperCase()}<br>SETDA PROVINSI SULAWESI TENGGARA</div>
+    <div class="dh-ttd-space"></div>
+    <div class="nama-ttd">${esc(ORG_SETTINGS.kepalaNama) || '..............................................'}</div>
+    <div>${esc(ORG_SETTINGS.kepalaPangkat) || ''}</div>
+    <div>NIP. ${esc(ORG_SETTINGS.kepalaNip) || '..............................................'}</div>
+  </div>`;
+  return `${letterheadKop()}
+    <div class="dh-title">DAFTAR HADIR PNS, CPNS DAN PPPK</div><div class="dh-sub">${esc(ORG_SETTINGS.namaBiro).toUpperCase()} SETDA PROV. SULTRA</div>
     <div class="dh-meta-row"><span>HARI/TANGGAL : ${fmtTgl(tanggal)}</span><span>APEL : ${jenisApel === 'Apel Pagi' ? 'PAGI' : 'SORE'}</span></div>
-    ${table}`;
+    ${table}${catatan}${sign}`;
 }
 document.getElementById('btnCetakDaftarHadir').addEventListener('click', async () => {
   const mode = document.getElementById('rekapModeStaf').value;
@@ -926,7 +962,7 @@ document.getElementById('btnCetakDaftarHadir').addEventListener('click', async (
         const tandaTangan = (k && k.tandaTangan) || (hadirFisik ? p.tandaTangan : null) || null;
         return { staf: p, status, tandaTangan, keterangan: k ? k.keterangan : '' };
       });
-      doPrint(buildDaftarHadirHtml({ tanggal, jenisApel, rows }), false);
+      doPrint(buildDaftarHadirHtml({ tanggal, jenisApel, rows }), false, `Daftar Hadir ${jenisApel} ${tanggal}`);
     } catch (err) {
       toast('Gagal menyiapkan cetak: ' + err.message, 'error');
     }
@@ -945,9 +981,8 @@ document.getElementById('btnCetakDaftarHadir').addEventListener('click', async (
     const body = list.map((r, i) => `<tr><td>${i + 1}</td><td>${esc(r.staf.nama)}</td>${STATUS_LIST_STAF.map((s) => `<td class="num">${r[s]}</td>`).join('')}</tr>`).join('');
     const table = `<div class="print-table-wrap"><table class="print-table"><thead><tr><th class="num">No</th><th>Nama</th>${head}</tr></thead><tbody>${body}</tbody></table></div>`;
     const sub = `Periode: ${lastRekapStaf.dari} s.d. ${lastRekapStaf.sampai}`;
-    // Tanpa kop surat (header) & tanpa blok tanda tangan (footer) — hanya judul + tabel.
-    const titleBlock = `<div class="dh-title">REKAPITULASI KEHADIRAN PEGAWAI</div><div class="dh-sub">${esc(ORG_SETTINGS.namaBiro).toUpperCase()} SETDA PROV. SULTRA</div><div class="dh-meta-row"><span>${esc(sub)}</span><span></span></div>`;
-    doPrint(titleBlock + table, true);
+    const titleBlock = `${letterheadKop()}<div class="dh-title">REKAPITULASI KEHADIRAN PEGAWAI</div><div class="dh-sub">${esc(ORG_SETTINGS.namaBiro).toUpperCase()} SETDA PROV. SULTRA</div><div class="dh-meta-row"><span>${esc(sub)}</span><span></span></div>`;
+    doPrint(titleBlock + table, true, `Rekap Kehadiran ${lastRekapStaf.dari} s.d. ${lastRekapStaf.sampai}`);
   }
 });
 
