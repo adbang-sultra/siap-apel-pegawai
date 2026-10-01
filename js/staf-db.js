@@ -203,6 +203,11 @@ const StafDB = {
     throwIfErrorStaf(error);
     return rowToKehadiranStaf(data);
   },
+  // Hapus satu catatan kehadiran (untuk membatalkan absen yang salah dicatat)
+  async deleteKehadiranSatu(id) {
+    const { error } = await clientStaf().from('kehadiran_staf').delete().eq('id', id);
+    throwIfErrorStaf(error);
+  },
 
   // ---------------- BACKUP ----------------
   async exportAllStaf() {

@@ -97,10 +97,29 @@ Kode QR dibuat dari kombinasi `id pegawai + slot waktu (10 detik) + tanda HMAC-S
 
 ## 7. Tentang hasil cetak
 
-- **Daftar Hadir** (mode harian) dan **Rekapitulasi** (mode rentang tanggal) dicetak **tanpa kop surat dan tanpa blok tanda tangan Kepala Biro** — hanya judul ringkas, info tanggal/apel, dan tabel.
-- Pada kolom **Tanda Tangan**: jika pegawai hadir (lewat scan QR), tanda tangan tersimpannya otomatis ditampilkan sebagai gambar. Jika tidak hadir, kolom menampilkan **keterangan yang diketik Admin** (bila diisi) atau nama status (Izin/Sakit/Cuti/dst.) bila keterangan dikosongkan.
+- **Daftar Hadir** (mode harian) dan **Rekapitulasi** (mode rentang tanggal) dicetak lengkap dengan kop surat dan blok tanda tangan Kepala Biro.
+- Pada kolom **Tanda Tangan**: jika pegawai hadir (lewat scan QR), tanda tangan tersimpannya otomatis ditampilkan sebagai gambar — termasuk bila tanda tangan baru disimpan pegawai *setelah* jam absen hari itu. Jika tidak hadir, kolom menampilkan **keterangan yang diketik Admin** (bila diisi) atau nama status (Izin/Sakit/Cuti/dst.) bila keterangan dikosongkan.
+- "Headers and footers" (judul halaman/URL di atas, tanggal & nomor halaman di bawah) yang muncul otomatis di sebagian hasil cetak/PDF adalah pengaturan **dialog cetak browser**, bukan bagian dari halaman ini — matikan lewat "Lainnya"/"More settings" pada jendela cetak bila tidak diinginkan.
 
-## 8. Keamanan & catatan penting
+## 8. Urutan pegawai pada daftar & cetak
+
+Daftar pegawai (di Data Pegawai, Rekap, maupun cetak Daftar Hadir) diurutkan otomatis berdasarkan:
+1. **Kategori kepegawaian** — PNS lebih dulu, lalu CPNS, lalu PPPK.
+2. **Jabatan Kepala** — pemegang jabatan yang mengandung kata "Kepala" selalu ditempatkan paling atas dalam kategorinya.
+3. **Golongan** — golongan lebih tinggi (mis. IV/c) lebih dulu dari yang lebih rendah (mis. III/a).
+4. **Usia** — dibaca dari 8 digit pertama NIP (format tanggal lahir `YYYYMMDD`); yang lebih senior/tua lebih dulu bila golongannya sama.
+
+Urutan ini dihitung otomatis setiap kali data ditampilkan — tidak perlu diatur manual, dan pegawai baru akan otomatis masuk ke posisi yang sesuai.
+
+## 9. Menghapus data kehadiran
+
+Catatan kehadiran yang salah (mis. salah scan, salah pilih status) bisa dihapus dari dua tempat:
+- **Absen → Riwayat Sesi Ini** — tombol "Hapus" di samping catatan yang baru saja dibuat pada sesi berjalan.
+- **Rekap & Cetak → mode Harian** — setelah klik "Tampilkan", setiap baris punya tombol "Hapus" untuk mengoreksi data hari apa pun (tidak terbatas sesi hari ini).
+
+Penghapusan bersifat permanen (termasuk tanda tangan yang tersimpan di catatan tersebut) dan akan meminta konfirmasi terlebih dahulu.
+
+## 10. Keamanan & catatan penting
 
 - **Login Admin & Pegawai adalah gerbang level aplikasi**, diverifikasi lewat fungsi database (`security definer`) yang membandingkan hash bcrypt tanpa pernah mengirim hash tersebut ke browser. Ini cocok untuk pemakaian internal satu biro. Untuk akses dari jaringan terbuka/publik, pertimbangkan menambah Supabase Auth.
 - Menghapus data pegawai akan ikut menghapus seluruh riwayat kehadirannya (`ON DELETE CASCADE`). Gunakan **Nonaktifkan** bila hanya ingin menghentikan pencatatan tanpa kehilangan riwayat.

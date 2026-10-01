@@ -105,9 +105,20 @@
 .pg-tab.active{background:var(--navy-900);color:#fff;}
 .pg-panel{display:none;}
 .pg-panel.active{display:block;animation:pageIn .28s var(--ease);}
-/* Panel QR ditengahkan secara vertikal di sisa ruang layar (bukan menempel
-   di atas dengan banyak ruang kosong di bawahnya) */
-#pg-qr.pg-panel.active{display:flex;flex-direction:column;justify-content:center;flex:1;min-height:0;}
+/* Panel QR: tinggi kotaknya tetap dihitung flexbox (mengisi persis sisa
+   layar di bawah topbar+tab, tidak menutupinya), TAPI posisi kartu di
+   dalamnya memakai teknik "absolute center" klasik (top/left 50% + translate)
+   yang tidak bergantung pada perilaku justify-content di berbagai browser HP. */
+#pg-qr.pg-panel.active{flex:1;min-height:0;position:relative;display:block;}
+#pg-qr.pg-panel.active .card{
+  position:absolute;
+  top:50%;
+  left:50%;
+  transform:translate(-50%, -50%);
+  margin:0;
+  width:calc(100% - 4px);
+  max-width:480px;
+}
 
 .rotating-qr-wrap{position:relative;width:220px;height:220px;margin:14px auto 10px;}
 .rotating-qr-wrap canvas{width:100%;height:100%;display:block;border-radius:var(--radius-md);border:1px solid var(--border);}

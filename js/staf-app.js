@@ -30,6 +30,54 @@ function defaultJenisApel() {
   return new Date().getHours() < 12 ? 'Apel Pagi' : 'Apel Sore';
 }
 
+// =====================================================================
+// URUTAN PEGAWAI — berdasarkan tingkat jabatan (kategori kepegawaian +
+// golongan) dan usia (dibaca dari 8 digit awal NIP = tanggal lahir),
+// mengikuti kaidah urutan pada Daftar Hadir resmi: PNS lebih dulu dari
+// CPNS/PPPK, golongan lebih tinggi lebih dulu, lalu yang lebih senior/tua
+// (tanggal lahir lebih awal) lebih dulu bila golongannya sama.
+// =====================================================================
+const KATEGORI_RANK = { PNS: 1, CPNS: 2, PPPK: 3 };
+function golonganScore(g) {
+  const m = String(g || '')
+    .trim()
+    .match(/^(IV|III|II|I|V)\s*\/?\s*([a-e])?/i);
+  if (!m) return 0;
+  const romanMap = { I: 1, II: 2, III: 3, IV: 4, V: 5 };
+  const roman = romanMap[m[1].toUpperCase()] || 0;
+  const letter = m[2] ? m[2].toLowerCase().charCodeAt(0) - 96 : 0; // a=1, b=2, ...
+  return roman * 10 + letter;
+}
+function nipBirthDateNum(nip) {
+  const digits = String(nip || '').replace(/\D/g, '');
+  if (digits.length < 8) return 99999999; // tidak dikenali → taruh paling akhir
+  const n = parseInt(digits.slice(0, 8), 10);
+  return Number.isFinite(n) ? n : 99999999;
+}
+function isJabatanKepala(jabatan) {
+  return /\bkepala\b/i.test(jabatan || '');
+}
+function compareStaf(a, b) {
+  if (!a || !b) return 0;
+  const ka = KATEGORI_RANK[a.kategori] || 9;
+  const kb = KATEGORI_RANK[b.kategori] || 9;
+  if (ka !== kb) return ka - kb;
+  const ia = isJabatanKepala(a.jabatan) ? 0 : 1;
+  const ib = isJabatanKepala(b.jabatan) ? 0 : 1;
+  if (ia !== ib) return ia - ib;
+  const ga = golonganScore(a.golongan);
+  const gb = golonganScore(b.golongan);
+  if (ga !== gb) return gb - ga; // golongan lebih tinggi dulu
+  const na = nipBirthDateNum(a.nip);
+  const nb = nipBirthDateNum(b.nip);
+  if (na !== nb) return na - nb; // lahir lebih awal (lebih senior/tua) dulu
+  return (a.nama || '').localeCompare(b.nama || '');
+}
+// Pembanding untuk baris rekap/kehadiran berbentuk { staf, ... }
+function compareRowStaf(ra, rb) {
+  return compareStaf(ra && ra.staf, rb && rb.staf);
+}
+
 // ---------------- OFFLINE BANNER ----------------
 function updateOnlineStatus() {
   const el = document.getElementById('offlineBanner');
@@ -440,13 +488,26 @@ function drawSesiLog() {
   const tbody = document.getElementById('sesiLog');
   tbody.innerHTML =
     SESI_LOG.map(
-      (e) => `<tr><td>${e.waktu}</td><td>${esc(e.nama)}</td><td><span class="badge" style="background:${STATUS_COLOR_STAF[e.status]}">${STATUS_LABEL_STAF[e.status]}</span></td><td>${e.metode === 'QR' ? '📷 QR' : '✋ Manual'}</td></tr>`
-    ).join('') || '<tr><td colspan="4" class="muted">Belum ada catatan pada sesi ini.</td></tr>';
+      (e) =>
+        `<tr><td>${e.waktu}</td><td>${esc(e.nama)}</td><td><span class="badge" style="background:${STATUS_COLOR_STAF[e.status]}">${STATUS_LABEL_STAF[e.status]}</span></td><td>${e.metode === 'QR' ? '📷 QR' : '✋ Manual'}</td><td><button class="btn small danger" onclick="hapusKehadiranSesi('${e.id}')">Hapus</button></td></tr>`
+    ).join('') || '<tr><td colspan="5" class="muted">Belum ada catatan pada sesi ini.</td></tr>';
 }
-function logSesi(nama, status, metode) {
-  SESI_LOG.unshift({ waktu: new Date().toLocaleTimeString('id-ID'), nama, status, metode });
+function logSesi(id, nama, status, metode) {
+  SESI_LOG.unshift({ id, waktu: new Date().toLocaleTimeString('id-ID'), nama, status, metode });
   drawSesiLog();
 }
+window.hapusKehadiranSesi = async (id) => {
+  if (!confirm('Hapus catatan kehadiran ini? Pegawai perlu di-scan/dicatat ulang bila ini salah hapus.')) return;
+  try {
+    await StafDB.deleteKehadiranSatu(id);
+    SESI_LOG = SESI_LOG.filter((e) => e.id !== id);
+    drawSesiLog();
+    renderDashboardStaf();
+    toast('Catatan kehadiran dihapus.');
+  } catch (err) {
+    toast('Gagal menghapus: ' + err.message, 'error');
+  }
+};
 
 // --- Scan QR ---
 document.getElementById('btnMulaiScan').addEventListener('click', () => {
@@ -573,7 +634,7 @@ async function onScanSuccess(decodedText) {
       return;
     }
     const status = staf.kategori === 'PPPK' ? 'HADIR_P3K' : 'HADIR';
-    await StafDB.upsertKehadiranSatu({
+    const savedQr = await StafDB.upsertKehadiranSatu({
       tanggal,
       jenisApel,
       stafId: staf.id,
@@ -585,7 +646,7 @@ async function onScanSuccess(decodedText) {
     scanDebug('BERHASIL: ' + staf.nama + ' — ' + STATUS_LABEL_STAF[status]);
     const sub = staf.tandaTangan ? 'Kehadiran tercatat ✓ tanda tangan tersimpan' : 'Kehadiran tercatat — pegawai belum menyimpan tanda tangan';
     flashScan('✅', staf.nama, sub, false);
-    logSesi(staf.nama, status, 'QR');
+    logSesi(savedQr.id, staf.nama, status, 'QR');
     renderDashboardStaf();
   } catch (err) {
     scanDebug('ERROR: ' + err.message);
@@ -611,7 +672,7 @@ document.getElementById('btnTutupTidakHadir').addEventListener('click', () => {
 document.getElementById('tidakHadirSearch').addEventListener('input', drawTidakHadirList);
 function drawTidakHadirList() {
   const q = (document.getElementById('tidakHadirSearch').value || '').toLowerCase();
-  const list = STAF.filter((p) => p.aktif && (p.nama.toLowerCase().includes(q) || p.nip.includes(q))).sort((a, b) => a.nama.localeCompare(b.nama));
+  const list = STAF.filter((p) => p.aktif && (p.nama.toLowerCase().includes(q) || p.nip.includes(q))).sort(compareStaf);
   document.getElementById('tidakHadirList').innerHTML =
     list
       .slice(0, 100)
@@ -650,7 +711,7 @@ document.getElementById('btnSimpanTidakHadir').addEventListener('click', async (
   const btn = document.getElementById('btnSimpanTidakHadir');
   btn.disabled = true;
   try {
-    await StafDB.upsertKehadiranSatu({
+    const savedManual = await StafDB.upsertKehadiranSatu({
       tanggal: absenTanggalEl.value,
       jenisApel: absenJenisApelEl.value,
       stafId: TH_PICKED.id,
@@ -659,7 +720,7 @@ document.getElementById('btnSimpanTidakHadir').addEventListener('click', async (
       tandaTangan: null,
       metode: 'MANUAL',
     });
-    logSesi(TH_PICKED.nama, TH_STATUS, 'MANUAL');
+    logSesi(savedManual.id, TH_PICKED.nama, TH_STATUS, 'MANUAL');
     toast(`${TH_PICKED.nama} dicatat sebagai ${STATUS_LABEL_STAF[TH_STATUS]}.`);
     renderDashboardStaf();
     document.getElementById('btnBatalTidakHadir').click();
@@ -677,7 +738,7 @@ function renderStafTable() {
   const q = (document.getElementById('searchStaf').value || '').toLowerCase();
   const kat = document.getElementById('filterKategori').value;
   const tbody = document.getElementById('tabelStaf');
-  const rows = STAF.filter((p) => (p.nama.toLowerCase().includes(q) || p.nip.includes(q)) && (!kat || p.kategori === kat)).sort((a, b) => (a.urutan || 9999) - (b.urutan || 9999) || a.nama.localeCompare(b.nama));
+  const rows = STAF.filter((p) => (p.nama.toLowerCase().includes(q) || p.nip.includes(q)) && (!kat || p.kategori === kat)).sort(compareStaf);
   tbody.innerHTML =
     rows
       .map(
@@ -829,23 +890,40 @@ async function getRekapDataStaf() {
   return { mode, dari, sampai, jenisApel, rows };
 }
 function renderRekapHarianStaf(data) {
-  const rows = data.rows.slice().sort((a, b) => (a.staf.urutan || 9999) - (b.staf.urutan || 9999) || a.staf.nama.localeCompare(b.staf.nama));
+  const rows = data.rows.slice().sort(compareRowStaf);
   const body =
     rows
-      .map((r, i) => `<tr><td>${i + 1}</td><td>${esc(r.staf.nama)}</td><td>${esc(r.staf.golongan)}</td><td>${esc(r.staf.jabatan)}</td><td><span class="badge" style="background:${STATUS_COLOR_STAF[r.status]}">${STATUS_LABEL_STAF[r.status]}</span></td><td>${r.tandaTangan ? '✔️ Ada' : '—'}</td></tr>`)
-      .join('') || '<tr><td colspan="6" class="muted">Tidak ada data pada periode ini.</td></tr>';
+      .map(
+        (r, i) =>
+          `<tr><td>${i + 1}</td><td>${esc(r.staf.nama)}</td><td>${esc(r.staf.golongan)}</td><td>${esc(r.staf.jabatan)}</td><td><span class="badge" style="background:${STATUS_COLOR_STAF[r.status]}">${STATUS_LABEL_STAF[r.status]}</span></td><td>${r.tandaTangan ? '✔️ Ada' : '—'}</td><td><button class="btn small danger" onclick="hapusKehadiranRekap('${r.id}')">Hapus</button></td></tr>`
+      )
+      .join('') || '<tr><td colspan="7" class="muted">Tidak ada data pada periode ini.</td></tr>';
   const c = Object.fromEntries(STATUS_LIST_STAF.map((s) => [s, 0]));
   rows.forEach((r) => c[r.status]++);
-  return `<div class="table-wrap"><table><thead><tr><th>No</th><th>Nama</th><th>Gol</th><th>Jabatan</th><th>Status</th><th>Tanda Tangan</th></tr></thead><tbody>${body}</tbody></table></div>
+  return `<div class="table-wrap"><table><thead><tr><th>No</th><th>Nama</th><th>Gol</th><th>Jabatan</th><th>Status</th><th>Tanda Tangan</th><th>Aksi</th></tr></thead><tbody>${body}</tbody></table></div>
   <div class="grid-cards" style="margin-top:14px;">${statCardsHtmlStaf(c)}</div>`;
 }
+window.hapusKehadiranRekap = async (id) => {
+  if (!confirm('Hapus catatan kehadiran ini secara permanen?')) return;
+  try {
+    await StafDB.deleteKehadiranSatu(id);
+    if (lastRekapStaf) {
+      lastRekapStaf.rows = lastRekapStaf.rows.filter((r) => r.id !== id);
+      document.getElementById('rekapHasilStaf').innerHTML = lastRekapStaf.mode === 'harian' ? renderRekapHarianStaf(lastRekapStaf) : renderRekapRangeStaf(lastRekapStaf);
+    }
+    renderDashboardStaf();
+    toast('Catatan kehadiran dihapus.');
+  } catch (err) {
+    toast('Gagal menghapus: ' + err.message, 'error');
+  }
+};
 function renderRekapRangeStaf(data) {
   const byStaf = {};
   data.rows.forEach((r) => {
     if (!byStaf[r.stafId]) byStaf[r.stafId] = { staf: r.staf, ...Object.fromEntries(STATUS_LIST_STAF.map((s) => [s, 0])) };
     byStaf[r.stafId][r.status]++;
   });
-  const arr = Object.values(byStaf).sort((a, b) => (a.staf.urutan || 9999) - (b.staf.urutan || 9999) || a.staf.nama.localeCompare(b.staf.nama));
+  const arr = Object.values(byStaf).sort(compareRowStaf);
   const head = STATUS_LIST_STAF.map((s) => `<th>${STATUS_LABEL_STAF[s]}</th>`).join('');
   const body = arr.map((r, i) => `<tr><td>${i + 1}</td><td>${esc(r.staf.nama)}</td>${STATUS_LIST_STAF.map((s) => `<td>${r[s]}</td>`).join('')}</tr>`).join('') || `<tr><td colspan="${2 + STATUS_LIST_STAF.length}" class="muted">Tidak ada data.</td></tr>`;
   const tot = Object.fromEntries(STATUS_LIST_STAF.map((s) => [s, 0]));
@@ -904,7 +982,7 @@ function letterheadKop() {
   </div>`;
 }
 function buildDaftarHadirHtml({ tanggal, jenisApel, rows }) {
-  const sorted = rows.slice().sort((a, b) => (a.staf.urutan || 9999) - (b.staf.urutan || 9999) || a.staf.nama.localeCompare(b.staf.nama));
+  const sorted = rows.slice().sort(compareRowStaf);
   let no = 0;
   const body = sorted
     .map((r) => {
@@ -990,7 +1068,7 @@ document.getElementById('btnCetakDaftarHadir').addEventListener('click', async (
       if (!arr[r.stafId]) arr[r.stafId] = { staf: r.staf, ...Object.fromEntries(STATUS_LIST_STAF.map((s) => [s, 0])) };
       arr[r.stafId][r.status]++;
     });
-    const list = Object.values(arr).sort((a, b) => (a.staf.urutan || 9999) - (b.staf.urutan || 9999) || a.staf.nama.localeCompare(b.staf.nama));
+    const list = Object.values(arr).sort(compareRowStaf);
     const head = STATUS_LIST_STAF.map((s) => `<th>${STATUS_LABEL_STAF[s]}</th>`).join('');
     const body = list.map((r, i) => `<tr><td>${i + 1}</td><td>${esc(r.staf.nama)}</td>${STATUS_LIST_STAF.map((s) => `<td class="num">${r[s]}</td>`).join('')}</tr>`).join('');
     const table = `<div class="print-table-wrap"><table class="print-table"><thead><tr><th class="num">No</th><th>Nama</th>${head}</tr></thead><tbody>${body}</tbody></table></div>`;
