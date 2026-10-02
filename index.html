@@ -193,7 +193,10 @@
             <div class="field"><label>Cari</label><input type="text" id="searchStaf" placeholder="Nama / NIP..."></div>
             <div class="field"><label>Kategori</label><select id="filterKategori"><option value="">Semua</option><option value="PNS">PNS</option><option value="CPNS">CPNS</option><option value="PPPK">PPPK</option></select></div>
             <div class="field"><label>&nbsp;</label><button class="btn gold" id="btnTambahStaf">+ Tambah Pegawai</button></div>
+            <div class="field"><label>&nbsp;</label><button class="btn outline" id="btnFormatNamaTitle">Aa Ubah Semua Nama → Judul Kata</button></div>
+            <div class="field"><label>&nbsp;</label><button class="btn outline" id="btnFormatNamaUpper">AA Ubah Semua Nama → HURUF BESAR</button></div>
           </div>
+          <div class="hint">Format nama berlaku untuk nama orangnya saja — gelar/pangkat (SE, M.Si, S.Pd, Dr, H, dst.) tidak diubah.</div>
           <div class="table-wrap">
             <table>
               <thead><tr><th>No</th><th>Nama</th><th>NIP</th><th>Gol</th><th>Kategori</th><th>Jabatan</th><th>Akun</th><th>TTD</th><th>Status</th><th>Aksi</th></tr></thead>
@@ -307,16 +310,15 @@
       </div>
     </div>
 
-    <!-- QR SAYA -->
+    <!-- QR SAYA (tampil layar-penuh, benar-benar ditengahkan ke layar) -->
     <div id="pg-qr" class="pg-panel">
-      <div class="card" style="text-align:center;">
-        <h2 style="justify-content:center;">QR Absen Saya</h2>
+      <button class="qr-fs-back" id="btnTutupQrFull">← Kembali</button>
+      <div class="qr-fs-center">
+        <h2>QR Absen Saya</h2>
         <p class="hint">Tunjukkan layar ini ke kamera Admin saat apel. Kode berganti otomatis setiap 10 detik demi keamanan.</p>
-        <div class="rotating-qr-wrap">
-          <canvas id="rotatingQrCanvas"></canvas>
-          <svg class="qr-timer-ring" viewBox="0 0 36 36"><circle id="qrTimerCircle" cx="18" cy="18" r="16" fill="none" stroke="#C89B3C" stroke-width="2"></circle></svg>
-        </div>
-        <div id="qrCountdownLabel" class="qr-countdown">10</div>
+        <canvas id="rotatingQrCanvas"></canvas>
+        <div class="qr-countdown-bar"><div class="qr-countdown-fill" id="qrCountdownFill"></div></div>
+        <div id="qrCountdownLabel" class="qr-countdown">Kode baru dalam 10 detik</div>
       </div>
     </div>
   </div>
@@ -330,7 +332,14 @@
   <div class="modal">
     <h3 id="modalStafTitle">Tambah Pegawai</h3>
     <input type="hidden" id="stafId">
-    <div class="form-row"><label>Nama</label><input type="text" id="stafNama"></div>
+    <div class="form-row">
+      <label>Nama</label>
+      <input type="text" id="stafNama">
+      <div style="display:flex;gap:6px;margin-top:5px;">
+        <button type="button" class="btn small outline" id="btnNamaAa">Aa Judul Kata</button>
+        <button type="button" class="btn small outline" id="btnNamaAA">AA Huruf Besar</button>
+      </div>
+    </div>
     <div class="form-row"><label>NIP</label><input type="text" id="stafNip"></div>
     <div class="form-row"><label>Golongan</label><input type="text" id="stafGolongan" placeholder="contoh: III/a"></div>
     <div class="form-row"><label>Kategori</label><select id="stafKategori"><option value="PNS">PNS</option><option value="CPNS">CPNS</option><option value="PPPK">PPPK</option></select></div>

@@ -88,10 +88,16 @@ Atau import folder ini sebagai project baru lewat dashboard Vercel (preset **Oth
 
 Kode QR dibuat dari kombinasi `id pegawai + slot waktu (10 detik) + tanda HMAC-SHA256`, dihitung langsung di browser pegawai (Web Crypto API) dan diverifikasi di browser Admin saat scan — cocok untuk mencegah kecurangan sederhana seperti memfoto/screenshot QR untuk dipakai orang lain atau di waktu lain, karena kode kedaluwarsa dalam hitungan detik. Jam HP pegawai dan perangkat Admin **otomatis disamakan lewat waktu server** (fungsi `server_time_ms()`) setiap kali layar Scan/QR dibuka, supaya kode tidak salah dianggap kedaluwarsa hanya karena jam kedua perangkat berbeda.
 
-**Jika kamera tidak berhasil membaca QR:**
+Layar "QR Saya" tampil **layar-penuh** (menutupi tab lainnya sementara) dengan QR benar-benar ditengahkan ke layar perangkat — ada tombol "← Kembali" di pojok kiri atas untuk kembali ke tab Profil/Tanda Tangan. Hitung mundur 10 detik ditampilkan sebagai bar progres **di bawah** QR, bukan cincin yang menutupi kodenya.
+
+**Supaya kamera lebih mudah & cepat membaca QR** (termasuk saat cahaya redup/kabur):
+- QR dibuat dengan **kontras hitam-putih penuh** dan **tingkat koreksi kesalahan tinggi (H)** — tetap bisa terbaca walau sebagian kodenya buram/terpantul cahaya.
+- Kamera Admin memakai **fokus otomatis berkelanjutan** dan resolusi lebih tinggi bila didukung perangkat, memindai lebih sering per detik (20x/detik), serta area pindai yang lebih besar.
+
+**Jika kamera masih belum berhasil membaca QR:**
 - Pastikan situs dibuka lewat **HTTPS** (bukan `http://`) — Vercel sudah otomatis HTTPS.
 - Di layar "Absen → Mulai Scan QR", ada baris kecil abu-abu (`scanDebug`) yang menampilkan status pemindaian terakhir (mis. "DITOLAK: QR kedaluwarsa…") — berguna untuk mendiagnosis kalau ada masalah.
-- Naikkan kecerahan layar HP pegawai saat menunjukkan QR ke kamera.
+- Naikkan kecerahan layar HP pegawai saat menunjukkan QR ke kamera, dan jaga jarak/fokus kamera tetap stabil sejenak (jangan digoyang terlalu cepat).
 - Di komputer/laptop tanpa kamera belakang, aplikasi otomatis memakai kamera yang tersedia (webcam depan) — tidak perlu diatur manual.
 - Kode QR berganti setiap 10 detik; bila pegawai baru saja login dan langsung memindahkan HP terlalu cepat sebelum QR sempat digambar ulang, cukup tunggu QR berikutnya muncul (ada hitung mundur di layar pegawai).
 
@@ -119,7 +125,17 @@ Catatan kehadiran yang salah (mis. salah scan, salah pilih status) bisa dihapus 
 
 Penghapusan bersifat permanen (termasuk tanda tangan yang tersimpan di catatan tersebut) dan akan meminta konfirmasi terlebih dahulu.
 
-## 10. Keamanan & catatan penting
+## 10. Mengubah format nama (Judul Kata / HURUF BESAR)
+
+Di halaman **Data Pegawai** tersedia dua tombol untuk mengubah format penulisan nama secara massal (sesuai pencarian/filter kategori yang sedang aktif):
+- **"Aa Ubah Semua Nama → Judul Kata"** — mis. `SITI NURJANNAH, SE.` menjadi `Siti Nurjannah, SE.`
+- **"AA Ubah Semua Nama → HURUF BESAR"** — kembali ke huruf kapital semua.
+
+Perubahan **hanya berlaku pada bagian nama orangnya**, bukan gelar/pangkat (SE, M.Si, S.Pd, Dr, H, Hj, dst.) — gelar dikenali lewat tanda koma pertama (`Nama, Gelar1, Gelar2`) atau, bila tidak ada koma, lewat daftar singkatan gelar umum di akhir nama, dan dibiarkan apa adanya. Admin akan diminta konfirmasi sebelum perubahan massal diterapkan.
+
+Untuk mengubah satu nama saja, tombol "Aa Judul Kata" / "AA Huruf Besar" juga tersedia di dalam form Tambah/Edit Pegawai (langsung mengubah isi kotak Nama, belum tersimpan sebelum klik Simpan).
+
+## 11. Keamanan & catatan penting
 
 - **Login Admin & Pegawai adalah gerbang level aplikasi**, diverifikasi lewat fungsi database (`security definer`) yang membandingkan hash bcrypt tanpa pernah mengirim hash tersebut ke browser. Ini cocok untuk pemakaian internal satu biro. Untuk akses dari jaringan terbuka/publik, pertimbangkan menambah Supabase Auth.
 - Menghapus data pegawai akan ikut menghapus seluruh riwayat kehadirannya (`ON DELETE CASCADE`). Gunakan **Nonaktifkan** bila hanya ingin menghentikan pencatatan tanpa kehilangan riwayat.

@@ -105,26 +105,51 @@
 .pg-tab.active{background:var(--navy-900);color:#fff;}
 .pg-panel{display:none;}
 .pg-panel.active{display:block;animation:pageIn .28s var(--ease);}
-/* Panel QR: tinggi kotaknya tetap dihitung flexbox (mengisi persis sisa
-   layar di bawah topbar+tab, tidak menutupinya), TAPI posisi kartu di
-   dalamnya memakai teknik "absolute center" klasik (top/left 50% + translate)
-   yang tidak bergantung pada perilaku justify-content di berbagai browser HP. */
-#pg-qr.pg-panel.active{flex:1;min-height:0;position:relative;display:block;}
-#pg-qr.pg-panel.active .card{
-  position:absolute;
-  top:50%;
-  left:50%;
-  transform:translate(-50%, -50%);
-  margin:0;
-  width:calc(100% - 4px);
-  max-width:480px;
-}
 
-.rotating-qr-wrap{position:relative;width:220px;height:220px;margin:14px auto 10px;}
-.rotating-qr-wrap canvas{width:100%;height:100%;display:block;border-radius:var(--radius-md);border:1px solid var(--border);}
-.qr-timer-ring{position:absolute;inset:-10px;transform:rotate(-90deg);transform-origin:50% 50%;pointer-events:none;}
-.qr-timer-ring circle{stroke-dasharray:100.5;stroke-dashoffset:0;transition:stroke-dashoffset 1s linear;stroke-linecap:round;}
-.qr-countdown{font-size:13px;color:var(--muted);font-weight:700;}
+/* --------------------------------------------------------------------
+   QR SAYA — layar penuh (position:fixed, inset:0) dengan CSS Grid
+   place-items:center. Ini teknik penengahan paling kuat: posisinya
+   dihitung langsung relatif terhadap viewport perangkat, sama sekali
+   tidak bergantung pada tinggi/flex induknya, sticky header, dvh/vh,
+   atau perilaku browser HP yang berbeda-beda. Tidak ada lagi cincin
+   hitung-mundur yang menutupi QR — diganti bar progres di bawah QR.
+   -------------------------------------------------------------------- */
+#pg-qr.pg-panel.active{
+  display:grid;
+  place-items:center;
+  position:fixed;
+  inset:0;
+  background:var(--bg);
+  z-index:60;
+  padding:24px;
+  padding-top:calc(24px + env(safe-area-inset-top,0px));
+  padding-bottom:calc(24px + env(safe-area-inset-bottom,0px));
+  animation:none;
+}
+.qr-fs-back{
+  position:absolute;
+  top:calc(16px + env(safe-area-inset-top,0px));
+  left:16px;
+  background:#fff;border:1px solid var(--border);border-radius:999px;
+  padding:8px 16px;font-weight:700;font-size:13px;color:var(--navy-900);cursor:pointer;
+  box-shadow:var(--shadow-sm);
+}
+.qr-fs-center{text-align:center;max-width:380px;width:100%;}
+.qr-fs-center h2{justify-content:center;margin-bottom:6px;}
+.qr-fs-center .hint{margin-bottom:18px;}
+#rotatingQrCanvas{
+  display:block;
+  width:min(72vw, 300px);
+  height:min(72vw, 300px);
+  margin:0 auto;
+  border-radius:var(--radius-md);
+  border:1px solid var(--border);
+  background:#fff;
+  box-shadow:var(--shadow-md);
+}
+.qr-countdown-bar{width:min(72vw,300px);height:8px;background:#E4E9F0;border-radius:999px;margin:18px auto 8px;overflow:hidden;}
+.qr-countdown-fill{height:100%;width:100%;background:var(--gold);border-radius:999px;transition:width 1s linear;}
+.qr-countdown{font-size:12.5px;color:var(--muted);font-weight:700;}
 
 /* =====================================================================
    CETAK — Daftar Hadir PNS, CPNS DAN PPPK (mengikuti format formulir fisik)

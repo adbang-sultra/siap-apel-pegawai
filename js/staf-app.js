@@ -78,6 +78,49 @@ function compareRowStaf(ra, rb) {
   return compareStaf(ra && ra.staf, rb && rb.staf);
 }
 
+// =====================================================================
+// FORMAT NAMA — ubah ke "Judul Kata" atau "HURUF BESAR", HANYA bagian
+// nama orangnya — gelar/pangkat (SE, M.Si, S.Pd, Dr, H, dst.) tetap apa
+// adanya karena penulisan gelar punya kaidah baku sendiri.
+// =====================================================================
+const GELAR_LIST = [
+  'SE', 'SH', 'ST', 'SP', 'SPD', 'SSOS', 'SIP', 'SSTP', 'SKOM', 'SIKOM', 'SM', 'SKM', 'SPI', 'SPSI', 'SAG', 'SFARM', 'SKEP',
+  'MM', 'MSI', 'MAP', 'MKOM', 'MPD', 'MT', 'MH', 'MSC', 'MBA', 'MKES', 'MPDI',
+  'DR', 'IR', 'DRS', 'DRA', 'PROF', 'H', 'HJ', 'APT', 'AMD',
+].map((s) => s.toUpperCase());
+function isGelarToken(tok) {
+  const clean = (tok || '').replace(/\./g, '').toUpperCase();
+  return GELAR_LIST.includes(clean);
+}
+// Pisahkan "nama" (akan diubah formatnya) dari "gelar" (dibiarkan apa adanya).
+// Pola umum: "Nama Lengkap, Gelar1, Gelar2" → dipisah di koma pertama.
+// Untuk yang tidak pakai koma (mis. "...ARI S.Pd"), gelar di-deteksi dari
+// token-token terakhir yang cocok dengan daftar GELAR_LIST.
+function splitNamaGelar(fullName) {
+  const s = (fullName || '').trim();
+  const commaIdx = s.indexOf(',');
+  if (commaIdx >= 0) {
+    return { nama: s.slice(0, commaIdx), gelar: s.slice(commaIdx) };
+  }
+  const tokens = s.split(/\s+/);
+  let cut = tokens.length;
+  for (let i = tokens.length - 1; i >= 0; i--) {
+    if (isGelarToken(tokens[i])) cut = i;
+    else break;
+  }
+  if (cut === tokens.length || cut === 0) return { nama: s, gelar: '' };
+  return { nama: tokens.slice(0, cut).join(' '), gelar: ' ' + tokens.slice(cut).join(' ') };
+}
+function toTitleCaseNama(fullName) {
+  const { nama, gelar } = splitNamaGelar(fullName);
+  const titled = nama.replace(/[^\s]+/g, (w) => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase());
+  return titled + gelar;
+}
+function toUpperCaseNama(fullName) {
+  const { nama, gelar } = splitNamaGelar(fullName);
+  return nama.toUpperCase() + gelar;
+}
+
 // ---------------- OFFLINE BANNER ----------------
 function updateOnlineStatus() {
   const el = document.getElementById('offlineBanner');
@@ -526,7 +569,7 @@ document.getElementById('btnStopScan').addEventListener('click', () => {
 
 // Area pindai proporsional dengan ukuran video (bukan angka tetap)
 function scanQrbox(vw, vh) {
-  const size = Math.max(120, Math.floor(Math.min(vw, vh) * 0.78));
+  const size = Math.max(150, Math.floor(Math.min(vw, vh) * 0.85));
   return { width: size, height: size };
 }
 async function startScanner() {
@@ -541,7 +584,21 @@ async function startScanner() {
   if (typeof Html5QrcodeSupportedFormats !== 'undefined') ctorCfg.formatsToSupport = [Html5QrcodeSupportedFormats.QR_CODE];
   const inst = new Html5Qrcode('qrReader', ctorCfg);
   html5QrCode = inst;
-  const cfg = { fps: 12, qrbox: scanQrbox };
+  // fps lebih tinggi = lebih sering mencoba membaca per detik (lebih responsif).
+  // videoConstraints: minta resolusi lebih tinggi + fokus otomatis berkelanjutan
+  // (bila didukung kamera/browser) supaya tetap tajam walau cahaya redup/kurang
+  // fokus, dan disableFlip supaya tidak membuang waktu mencoba varian cermin
+  // (QR di layar HP tidak pernah terbalik).
+  const cfg = {
+    fps: 20,
+    qrbox: scanQrbox,
+    disableFlip: true,
+    videoConstraints: {
+      width: { ideal: 1280 },
+      height: { ideal: 720 },
+      advanced: [{ focusMode: 'continuous' }],
+    },
+  };
   const okMsg = 'Arahkan kamera ke QR di layar HP pegawai (kecerahan layar dinaikkan) — kamera tetap aktif untuk pegawai berikutnya.';
   try {
     await inst.start({ facingMode: 'environment' }, cfg, onScanSuccess, () => {});
@@ -759,6 +816,52 @@ document.getElementById('searchStaf').addEventListener('input', renderStafTable)
 document.getElementById('filterKategori').addEventListener('change', renderStafTable);
 document.getElementById('btnTambahStaf').addEventListener('click', () => openModalStaf());
 document.getElementById('btnBatalStaf').addEventListener('click', () => document.getElementById('modalStaf').classList.add('hidden'));
+
+// Tombol cepat di dalam modal: ubah format nama pada field yang sedang diisi
+// (belum tersimpan — admin masih bisa meninjau sebelum klik Simpan).
+document.getElementById('btnNamaAa').addEventListener('click', () => {
+  const el = document.getElementById('stafNama');
+  el.value = toTitleCaseNama(el.value);
+});
+document.getElementById('btnNamaAA').addEventListener('click', () => {
+  const el = document.getElementById('stafNama');
+  el.value = toUpperCaseNama(el.value);
+});
+
+// Ubah format nama untuk SEMUA pegawai sekaligus (sesuai filter yang sedang
+// ditampilkan). Gelar/pangkat tidak ikut berubah — lihat splitNamaGelar().
+async function bulkFormatNama(transformFn, labelAksi) {
+  const q = (document.getElementById('searchStaf').value || '').toLowerCase();
+  const kat = document.getElementById('filterKategori').value;
+  const target = STAF.filter((p) => (p.nama.toLowerCase().includes(q) || p.nip.includes(q)) && (!kat || p.kategori === kat));
+  if (!target.length) {
+    alert('Tidak ada data untuk diubah.');
+    return;
+  }
+  const toUpdate = target.filter((p) => transformFn(p.nama) !== p.nama);
+  if (!toUpdate.length) {
+    toast('Semua nama pada daftar ini sudah sesuai format tersebut.');
+    return;
+  }
+  if (!confirm(`${labelAksi} untuk ${toUpdate.length} pegawai? Gelar/pangkat tidak akan diubah.`)) return;
+  toast(`Mengubah ${toUpdate.length} nama...`);
+  let sukses = 0;
+  for (const p of toUpdate) {
+    try {
+      const namaBaru = transformFn(p.nama);
+      const updated = await StafDB.updateStaf(p.id, { nama: namaBaru, nip: p.nip, golongan: p.golongan, kategori: p.kategori, jabatan: p.jabatan, aktif: p.aktif, urutan: p.urutan });
+      const idx = STAF.findIndex((x) => x.id === p.id);
+      if (idx >= 0) STAF[idx] = { ...STAF[idx], ...updated };
+      sukses++;
+    } catch (err) {
+      console.warn('Gagal mengubah nama', p.nama, err.message);
+    }
+  }
+  renderStafTable();
+  toast(`${sukses} dari ${toUpdate.length} nama berhasil diubah.`);
+}
+document.getElementById('btnFormatNamaTitle').addEventListener('click', () => bulkFormatNama(toTitleCaseNama, 'Ubah ke Judul Kata'));
+document.getElementById('btnFormatNamaUpper').addEventListener('click', () => bulkFormatNama(toUpperCaseNama, 'Ubah ke HURUF BESAR'));
 
 function openModalStaf(p) {
   document.getElementById('modalStafTitle').textContent = p ? 'Edit Pegawai' : 'Tambah Pegawai';
@@ -1283,8 +1386,9 @@ async function drawRotatingQr() {
   const slot = currentTimeSlot();
   lastDrawnSlot = slot; // tandai lebih dulu agar tidak tergambar ganda
   const payload = await computeRotatingPayload(PEGAWAI_SESSION.id, PEGAWAI_SESSION.qrToken, slot);
-  // Margin (quiet zone) 4 modul + koreksi kesalahan M = mudah dibaca kamera dari layar HP
-  QRCode.toCanvas(c, payload, { width: 260, margin: 4, errorCorrectionLevel: 'M', color: { dark: '#0F2A47', light: '#FFFFFF' } }, () => {});
+  // Margin (quiet zone) lebar + koreksi kesalahan TINGGI (H) + kontras hitam-putih
+  // penuh — supaya tetap mudah dipindai kamera walau layar agak redup/buram/miring.
+  QRCode.toCanvas(c, payload, { width: 320, margin: 3, errorCorrectionLevel: 'H', color: { dark: '#000000', light: '#FFFFFF' } }, () => {});
 }
 function startRotatingQr() {
   stopRotatingQr();
@@ -1294,17 +1398,13 @@ function startRotatingQr() {
   syncClock().then(() => {
     if (qrRotateInterval && currentTimeSlot() !== lastDrawnSlot) drawRotatingQr();
   });
-  const circleLen = 100.5;
   qrRotateInterval = setInterval(() => {
     const msIntoSlot = nowMs() % 10000;
     const remaining = Math.ceil((10000 - msIntoSlot) / 1000);
     const label = document.getElementById('qrCountdownLabel');
-    if (label) label.textContent = remaining;
-    const circle = document.getElementById('qrTimerCircle');
-    if (circle) {
-      const frac = (10000 - msIntoSlot) / 10000;
-      circle.style.strokeDashoffset = (circleLen * (1 - frac)).toFixed(1);
-    }
+    if (label) label.textContent = `Kode baru dalam ${remaining} detik`;
+    const fill = document.getElementById('qrCountdownFill');
+    if (fill) fill.style.width = ((10000 - msIntoSlot) / 100).toFixed(1) + '%';
     // Gambar ulang setiap slot berganti (tidak bergantung pada ketepatan timer,
     // karena browser HP sering memperlambat timer)
     if (currentTimeSlot() !== lastDrawnSlot) drawRotatingQr();
@@ -1316,6 +1416,11 @@ function stopRotatingQr() {
 }
 document.addEventListener('visibilitychange', () => {
   if (!document.hidden && qrRotateInterval && currentTimeSlot() !== lastDrawnSlot) drawRotatingQr();
+});
+document.getElementById('btnTutupQrFull').addEventListener('click', () => {
+  document.querySelectorAll('.pg-tab').forEach((t) => t.classList.toggle('active', t.dataset.tab === 'profil'));
+  document.querySelectorAll('.pg-panel').forEach((p) => p.classList.toggle('active', p.id === 'pg-profil'));
+  stopRotatingQr();
 });
 
 async function bootPegawai(staf) {
